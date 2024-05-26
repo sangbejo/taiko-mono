@@ -1,29 +1,13 @@
-import { zeroAddress } from 'viem';
+import { MOCK_ERC20, MOCK_ERC721 } from './../src/tests/mocks/tokens';
+import { TokenType } from './$libs/token/types';
 
-const mockERC20 = {
-  name: 'MockERC20',
-  addresses: { '1': zeroAddress },
-  symbol: 'MTF',
-  decimals: 18,
-  type: 'ERC20',
-};
-
-const mockERC1155 = {
-  name: 'MockERC1155',
-  addresses: { '1': zeroAddress },
-  symbol: 'MNFT',
-  balance: 1337n,
-  tokenId: 123,
-  uri: 'some/uri/123',
-  type: 'ERC1155',
-};
-
-const mockERC721 = {
-  name: 'MockERC721',
-  addresses: { '1': zeroAddress },
-  symbol: 'MNFT',
-  decimals: 18,
-  type: 'ERC721',
-};
-
-export const customToken = [mockERC20, mockERC1155, mockERC721];
+export const customToken = [
+  {
+    ...MOCK_ERC20,
+    type: TokenType.ERC20,
+  },
+  {
+    ...MOCK_ERC721,
+    type: TokenType.ERC721,
+  },
+];

@@ -1,29 +1,21 @@
 import { getPublicClient } from '@wagmi/core';
 
-import { recommendProcessingFeeConfig } from '$config';
+import { gasLimitConfig } from '$config';
+import { PUBLIC_FEE_MULTIPLIER } from '$env/static/public';
 import { NoCanonicalInfoFoundError } from '$libs/error';
-import { type Token, TokenType } from '$libs/token';
+import { type NFT, type Token, TokenType } from '$libs/token';
 import { getTokenAddresses } from '$libs/token/getTokenAddresses';
+import { getBaseFee } from '$libs/util/getBaseFee';
 import { getLogger } from '$libs/util/logger';
 import { config } from '$libs/wagmi';
 
 const log = getLogger('libs:recommendedProcessingFee');
 
 type RecommendProcessingFeeArgs = {
-  token: Token;
+  token: Token | NFT;
   destChainId: number;
   srcChainId?: number;
 };
-
-const {
-  ethGasLimit,
-  erc20NotDeployedGasLimit,
-  erc20DeployedGasLimit,
-  erc1155DeployedGasLimit,
-  erc1155NotDeployedGasLimit,
-  erc721DeployedGasLimit,
-  erc721NotDeployedGasLimit,
-} = recommendProcessingFeeConfig;
 
 export async function recommendProcessingFee({
   token,
@@ -33,16 +25,18 @@ export async function recommendProcessingFee({
   if (!srcChainId) {
     return 0n;
   }
+
+  let estimatedMsgGaslimit;
+
+  const baseFee = await getBaseFee(BigInt(destChainId));
+
   const destPublicClient = getPublicClient(config, { chainId: destChainId });
 
   if (!destPublicClient) throw new Error('Could not get public client');
 
-  // getGasPrice will return gasPrice as 3000000001, rather than 3000000000
-  const gasPrice = await destPublicClient.getGasPrice();
+  const maxPriorityFee = await destPublicClient.estimateMaxPriorityFeePerGas();
 
-  // The gas limit for processMessage call for ETH is about ~800k.
-  // To make it enticing, we say 900k
-  let gasLimit = ethGasLimit;
+  if (!baseFee) throw new Error('Unable to get base fee');
 
   if (token.type !== TokenType.ETH) {
     const tokenInfo = await getTokenAddresses({ token, srcChainId, destChainId });
@@ -58,29 +52,47 @@ export async function recommendProcessingFee({
     }
     if (token.type === TokenType.ERC20) {
       if (isTokenAlreadyDeployed) {
-        gasLimit = erc20DeployedGasLimit;
         log(`token ${token.symbol} is already deployed on chain ${destChainId}`);
+
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc20DeployedGasLimit;
       } else {
-        gasLimit = erc20NotDeployedGasLimit;
         log(`token ${token.symbol} is not deployed on chain ${destChainId}`);
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc20NotDeployedGasLimit;
       }
     } else if (token.type === TokenType.ERC721) {
       if (isTokenAlreadyDeployed) {
-        gasLimit = erc721DeployedGasLimit;
         log(`token ${token.symbol} is already deployed on chain ${destChainId}`);
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc721DeployedGasLimit;
       } else {
-        gasLimit = erc721NotDeployedGasLimit;
         log(`token ${token.symbol} is not deployed on chain ${destChainId}`);
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc721NotDeployedGasLimit;
       }
     } else if (token.type === TokenType.ERC1155) {
       if (isTokenAlreadyDeployed) {
-        gasLimit = erc1155DeployedGasLimit;
         log(`token ${token.symbol} is already deployed on chain ${destChainId}`);
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc1155DeployedGasLimit;
       } else {
-        gasLimit = erc1155NotDeployedGasLimit;
         log(`token ${token.symbol} is not deployed on chain ${destChainId}`);
+        estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE) + gasLimitConfig.erc1155NotDeployedGasLimit;
       }
     }
+  } else {
+    log(`Fee for ETH bridging`);
+    estimatedMsgGaslimit = BigInt(gasLimitConfig.GAS_RESERVE);
   }
-  return gasPrice * gasLimit;
+  if (!estimatedMsgGaslimit) throw new Error('Unable to calculate fee');
+
+  const fee = estimatedMsgGaslimit * (BigInt(PUBLIC_FEE_MULTIPLIER) * (baseFee + maxPriorityFee));
+  return roundWeiTo6DecimalPlaces(fee);
+}
+
+function roundWeiTo6DecimalPlaces(wei: bigint): bigint {
+  const roundingFactor = BigInt('1000000000000'); // 10^12
+
+  // Calculate how many "10^12 wei" units are in the input
+  const units = wei / roundingFactor;
+
+  // Multiply back to get the rounded wei value
+  const roundedWei = units * roundingFactor;
+  return roundedWei;
 }

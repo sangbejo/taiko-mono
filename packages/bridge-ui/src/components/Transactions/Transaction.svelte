@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
   import { t } from 'svelte-i18n';
   import { formatEther, formatUnits } from 'viem';
 
   import { chainConfig } from '$chainConfig';
   import { DesktopOrLarger } from '$components/DesktopOrLarger';
+  import { ClaimDialog, ReleaseDialog, RetryDialog } from '$components/Dialogs';
   import { Icon } from '$components/Icon';
   import { LoadingText } from '$components/LoadingText';
   import NftInfoDialog from '$components/NFTs/NFTInfoDialog.svelte';
   import Spinner from '$components/Spinner/Spinner.svelte';
-  import type { BridgeTransaction } from '$libs/bridge';
+  import { type BridgeTransaction, MessageStatus } from '$libs/bridge';
+  import { getMessageStatusForMsgHash } from '$libs/bridge/getMessageStatusForMsgHash';
   import { getChainName } from '$libs/chain';
   import { type NFT, TokenType } from '$libs/token';
   import { fetchNFTImageUrl } from '$libs/token/fetchNFTImageUrl';
@@ -26,43 +27,42 @@
 
   let token: NFT;
   let insufficientModal = false;
-  let detailsOpen = false;
   let nftInfoOpen = false;
   let isDesktopOrLarger = false;
+  let detailsOpen = false;
+
+  let bridgeTxStatus: Maybe<MessageStatus>;
 
   let attrs = isDesktopOrLarger ? {} : { role: 'button' };
 
   const placeholderUrl = '/placeholder.svg';
 
-  const dispatch = createEventDispatcher();
-
-  const handleClick = () => {
-    openDetails();
-    dispatch('click');
+  const openNFTInfo = () => {
+    nftInfoOpen = true;
   };
 
-  const handlePress = () => {
-    openDetails();
-    dispatch('press');
+  const openDetails = () => {
+    if (!isDesktopOrLarger && !interactiveDialogsOpen) {
+      detailsOpen = true;
+    }
   };
 
   const closeDetails = () => {
     detailsOpen = false;
   };
 
-  const openDetails = () => {
-    if (!isDesktopOrLarger) {
-      detailsOpen = true;
-    }
-  };
-
-  const openNFTInfo = () => {
-    nftInfoOpen = true;
-  };
-
   const handleInsufficientFunds = () => {
     insufficientModal = true;
-    openDetails();
+  };
+
+  const handleOpenModal = (event: CustomEvent) => {
+    if (event.detail === 'retry') {
+      retryModalOpen = true;
+    } else if (event.detail === 'release') {
+      releaseModalOpen = true;
+    } else if (event.detail === 'claim') {
+      claimModalOpen = true;
+    }
   };
 
   async function analyzeTransactionInput(): Promise<void> {
@@ -80,6 +80,16 @@
     loading = false;
   }
 
+  async function claimingDone() {
+    // Keeping model and UI in sync
+    item.msgStatus = await getMessageStatusForMsgHash({
+      msgHash: item.msgHash,
+      srcChainId: Number(item.srcChainId),
+      destChainId: Number(item.destChainId),
+    });
+    bridgeTxStatus = item.msgStatus;
+  }
+
   $: {
     if (item.tokenType === TokenType.ERC721 || item.tokenType === TokenType.ERC1155) {
       // for NFTs we need to fetch more information about the transaction
@@ -92,12 +102,17 @@
   $: itemAmountDisplay = item.tokenType === TokenType.ERC721 ? '---' : item.amount;
 
   $: isNFT = [TokenType.ERC1155, TokenType.ERC721].includes(item.tokenType);
+
+  $: claimModalOpen = false;
+  $: retryModalOpen = false;
+  $: releaseModalOpen = false;
+
+  $: interactiveDialogsOpen = claimModalOpen || retryModalOpen || releaseModalOpen;
 </script>
 
 {#if isNFT}
   <!-- We disable these warnings as we dynamically add the role -->
   <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div class="flex items-center text-primary-content md:h-[80px] h-[45px] w-full my-[10px] md:my-[0px]">
     {#if isDesktopOrLarger}
       <div class="flex md:w-3/12 gap-[8px]">
@@ -135,7 +150,8 @@
         {itemAmountDisplay}
       </div>
     {:else}
-      <div class="flex text-primary-content w-full justify-content-left">
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div on:click={openDetails} {...attrs} class="flex text-primary-content w-full justify-content-left">
         {#if loading}
           <div class="rounded-[10px] w-[50px] h-[50px] bg-neutral flex items-center justify-center">
             <Spinner />
@@ -155,7 +171,7 @@
             <LoadingText mask="&nbsp;" class="min-w-[50px] max-w-[50px] h-3" />
           </div>
         {:else}
-          <div class="f-col" {...attrs} tabindex="0" on:click={handleClick} on:keydown={handlePress}>
+          <div class="f-col" tabindex="0">
             <div class="f-row font-bold">
               {truncateString(getChainName(Number(item.srcChainId)), 8)}
               <i role="img" aria-label="arrow to" class="mx-auto px-2">
@@ -168,16 +184,11 @@
         {/if}
       </div>
     {/if}
-    <div
-      class="flex md:w-2/12 py-2 flex flex-col justify-center text-center"
-      {...attrs}
-      tabindex="0"
-      on:click={handleClick}
-      on:keydown={handlePress}>
+    <div class="flex md:w-2/12 py-2 flex flex-col justify-center text-center" {...attrs} tabindex="0">
       <Status
-        on:click={isDesktopOrLarger ? undefined : openDetails}
         bridgeTx={item}
-        nft={token}
+        bind:bridgeTxStatus
+        on:openModal={handleOpenModal}
         on:insufficientFunds={handleInsufficientFunds} />
     </div>
     <div class="hidden md:flex grow py-2 flex flex-col justify-center">
@@ -191,14 +202,10 @@
     </div>
   </div>
 {:else}
-  <!-- We disable these warnings as we dynamically add the role -->
-  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div
+    on:click={openDetails}
     {...attrs}
-    tabindex="0"
-    on:click={handleClick}
-    on:keydown={handlePress}
     class="flex text-primary-content md:h-[80px] h-[45px] w-full my-[10px] md:my-[0px]">
     {#if isDesktopOrLarger}
       <div class="w-1/5 py-2 flex flex-row">
@@ -209,7 +216,7 @@
       </div>
       <div class="w-1/5 py-2 flex flex-col justify-center">
         {#if item.tokenType === TokenType.ERC20}
-          {formatUnits(item.amount ? item.amount : BigInt(0), item.decimals)}
+          {formatUnits(item.amount ? item.amount : BigInt(0), item.decimals ?? 0)}
         {:else if item.tokenType === TokenType.ETH}
           {formatEther(item.amount ? item.amount : BigInt(0))}
         {/if}
@@ -227,7 +234,7 @@
           </div>
           <div class=" flex flex-col justify-center text-sm text-secondary-content">
             {#if item.tokenType === TokenType.ERC20}
-              {formatUnits(item.amount ? item.amount : BigInt(0), item.decimals)}
+              {formatUnits(item.amount ? item.amount : BigInt(0), item.decimals ?? 0)}
             {:else if item.tokenType === TokenType.ETH}
               {formatEther(item.amount ? item.amount : BigInt(0))}
             {/if}
@@ -239,8 +246,9 @@
 
     <div class="md:w-1/5 py-2 flex flex-col justify-center">
       <Status
-        on:click={isDesktopOrLarger ? undefined : openDetails}
         bridgeTx={item}
+        bind:bridgeTxStatus
+        on:openModal={handleOpenModal}
         on:insufficientFunds={handleInsufficientFunds} />
     </div>
     <div class="hidden md:flex w-1/5 py-2 flex flex-col justify-center">
@@ -252,19 +260,30 @@
         <Icon type="arrow-top-right" fillClass="fill-primary-link" />
       </a>
     </div>
-    <!-- <button on:click={() => (claimModalOpen = true)}>test</button> -->
   </div>
 {/if}
 
 <DesktopOrLarger bind:is={isDesktopOrLarger} />
+
+<NftInfoDialog nft={token} bind:modalOpen={nftInfoOpen} viewOnly />
+
+<InsufficientFunds bind:modalOpen={insufficientModal} />
 
 <MobileDetailsDialog
   {token}
   {closeDetails}
   {detailsOpen}
   selectedItem={item}
-  on:insufficientFunds={handleInsufficientFunds} />
+  on:insufficientFunds={handleInsufficientFunds}
+  on:openModal={handleOpenModal} />
 
-<NftInfoDialog nft={token} bind:modalOpen={nftInfoOpen} on:close={closeDetails} viewOnly />
+<RetryDialog bridgeTx={item} bind:dialogOpen={retryModalOpen} />
 
-<InsufficientFunds bind:modalOpen={insufficientModal} />
+<ReleaseDialog bridgeTx={item} bind:dialogOpen={releaseModalOpen} />
+
+<ClaimDialog
+  bridgeTx={item}
+  bind:loading
+  bind:dialogOpen={claimModalOpen}
+  nft={token}
+  on:claimingDone={() => claimingDone()} />

@@ -10,18 +10,18 @@ import "./BytesUtils.sol";
 contract SigVerifyLib is ISigVerifyLib {
     using BytesUtils for bytes;
 
-    address private __es256Verifier;
+    address private immutable __es256Verifier;
 
     constructor(address es256Verifier) {
         __es256Verifier = es256Verifier;
     }
 
     function verifyES256Signature(
-        bytes memory tbs,
-        bytes memory signature,
-        bytes memory publicKey
+        bytes calldata tbs,
+        bytes calldata signature,
+        bytes calldata publicKey
     )
-        public
+        external
         view
         returns (bool sigValid)
     {

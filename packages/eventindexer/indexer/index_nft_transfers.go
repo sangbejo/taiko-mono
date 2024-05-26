@@ -116,33 +116,32 @@ func (i *Indexer) saveERC721Transfer(ctx context.Context, chainID *big.Int, vLog
 	)
 
 	// increment To address's balance
-
-	_, err := i.nftBalanceRepo.IncreaseBalance(ctx, eventindexer.UpdateNFTBalanceOpts{
+	// decrement From address's balance
+	increaseOpts := eventindexer.UpdateNFTBalanceOpts{
 		ChainID:         chainID.Int64(),
 		Address:         to,
 		TokenID:         tokenID,
 		ContractAddress: vLog.Address.Hex(),
 		ContractType:    "ERC721",
 		Amount:          1, // ERC721 is always 1
-	})
-	if err != nil {
-		return err
 	}
+	decreaseOpts := eventindexer.UpdateNFTBalanceOpts{}
 
-	// decrement From address's balance
 	// ignore zero address since that is usually the "mint"
 	if from != ZeroAddress.Hex() {
-		_, err = i.nftBalanceRepo.SubtractBalance(ctx, eventindexer.UpdateNFTBalanceOpts{
+		decreaseOpts = eventindexer.UpdateNFTBalanceOpts{
 			ChainID:         chainID.Int64(),
 			Address:         from,
 			TokenID:         tokenID,
 			ContractAddress: vLog.Address.Hex(),
 			ContractType:    "ERC721",
 			Amount:          1, // ERC721 is always 1
-		})
-		if err != nil {
-			return err
 		}
+	}
+
+	_, _, err := i.nftBalanceRepo.IncreaseAndDecreaseBalancesInTx(ctx, increaseOpts, decreaseOpts)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -157,76 +156,103 @@ func (i *Indexer) saveERC1155Transfer(ctx context.Context, chainID *big.Int, vLo
 
 	slog.Info("erc1155 found")
 
-	type transfer struct {
-		ID     *big.Int `abi:"id"`
-		Amount *big.Int `abi:"value"`
-	}
-
-	var transfers []transfer
-
 	erc1155ABI, err := abi.JSON(strings.NewReader(erc1155.ABI))
 	if err != nil {
 		return err
 	}
 
 	if vLog.Topics[0].Hex() == transferSingleSignatureHash.Hex() {
-		var t transfer
+		slog.Info("erc1155 transfer single")
+
+		type TransferSingleEvent struct {
+			Operator common.Address
+			From     common.Address
+			To       common.Address
+			Id       *big.Int
+			Value    *big.Int
+		}
+
+		var t TransferSingleEvent
 
 		err = erc1155ABI.UnpackIntoInterface(&t, "TransferSingle", []byte(vLog.Data))
 		if err != nil {
 			return err
 		}
 
-		transfers = append(transfers, t)
-	} else if vLog.Topics[0].Hex() != transferBatchSignatureHash.Hex() {
-		var t []transfer
+		increaseOpts := eventindexer.UpdateNFTBalanceOpts{
+			ChainID:         chainID.Int64(),
+			Address:         to,
+			TokenID:         t.Id.Int64(),
+			ContractAddress: vLog.Address.Hex(),
+			ContractType:    "ERC1155",
+			Amount:          t.Value.Int64(),
+		}
+		decreaseOpts := eventindexer.UpdateNFTBalanceOpts{}
+
+		if from != ZeroAddress.Hex() {
+			// decrement From address's balance
+			decreaseOpts = eventindexer.UpdateNFTBalanceOpts{
+				ChainID:         chainID.Int64(),
+				Address:         from,
+				TokenID:         t.Id.Int64(),
+				ContractAddress: vLog.Address.Hex(),
+				ContractType:    "ERC1155",
+				Amount:          t.Value.Int64(),
+			}
+		}
+
+		_, _, err = i.nftBalanceRepo.IncreaseAndDecreaseBalancesInTx(ctx, increaseOpts, decreaseOpts)
+		if err != nil {
+			return err
+		}
+	} else if vLog.Topics[0].Hex() == transferBatchSignatureHash.Hex() {
+		slog.Info("erc1155 transfer batch")
+
+		type TransferBatchEvent struct {
+			Operator common.Address
+			From     common.Address
+			To       common.Address
+			Ids      []*big.Int
+			Values   []*big.Int
+		}
+
+		var t TransferBatchEvent
 
 		err = erc1155ABI.UnpackIntoInterface(&t, "TransferBatch", []byte(vLog.Data))
 		if err != nil {
 			return err
 		}
 
-		transfers = t
-	}
-
-	slog.Info(
-		"erc1155 transfer found",
-		"from", from,
-		"to", to,
-		"transfers", transfers,
-		"contractAddress", vLog.Address.Hex(),
-	)
-
-	// increment To address's balance
-
-	for _, transfer := range transfers {
-		_, err = i.nftBalanceRepo.IncreaseBalance(ctx, eventindexer.UpdateNFTBalanceOpts{
-			ChainID:         chainID.Int64(),
-			Address:         to,
-			TokenID:         transfer.ID.Int64(),
-			ContractAddress: vLog.Address.Hex(),
-			ContractType:    "ERC1155",
-			Amount:          transfer.Amount.Int64(),
-		})
-		if err != nil {
-			return err
-		}
-
-		if from != ZeroAddress.Hex() {
-			// decrement From address's balance
-			_, err = i.nftBalanceRepo.SubtractBalance(ctx, eventindexer.UpdateNFTBalanceOpts{
+		for idx, id := range t.Ids {
+			increaseOpts := eventindexer.UpdateNFTBalanceOpts{
 				ChainID:         chainID.Int64(),
-				Address:         from,
-				TokenID:         transfer.ID.Int64(),
+				Address:         to,
+				TokenID:         id.Int64(),
 				ContractAddress: vLog.Address.Hex(),
 				ContractType:    "ERC1155",
-				Amount:          transfer.Amount.Int64(),
-			})
+				Amount:          t.Values[idx].Int64(),
+			}
+			decreaseOpts := eventindexer.UpdateNFTBalanceOpts{}
+
+			if from != ZeroAddress.Hex() {
+				// decrement From address's balance
+				decreaseOpts = eventindexer.UpdateNFTBalanceOpts{
+					ChainID:         chainID.Int64(),
+					Address:         from,
+					TokenID:         id.Int64(),
+					ContractAddress: vLog.Address.Hex(),
+					ContractType:    "ERC1155",
+					Amount:          t.Values[idx].Int64(),
+				}
+			}
+
+			_, _, err = i.nftBalanceRepo.IncreaseAndDecreaseBalancesInTx(ctx, increaseOpts, decreaseOpts)
 			if err != nil {
 				return err
 			}
 		}
 	}
+	// increment To address's balance
 
 	return nil
 }

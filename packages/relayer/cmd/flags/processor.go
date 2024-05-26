@@ -129,6 +129,20 @@ var (
 		Required: false,
 		EnvVars:  []string{"UNPROFITABLE_MESSAGE_QUEUE_EXPIRATION"},
 	}
+	MaxMessageRetries = &cli.Uint64Flag{
+		Name:     "maxMessageRetries",
+		Usage:    "How many times to retry a message due to unprofitability",
+		Category: processorCategory,
+		Value:    5,
+		EnvVars:  []string{"MAX_MESSAGE_RETRIES"},
+	}
+	DestQuotaManagerAddress = &cli.StringFlag{
+		Name:     "destQuotaManagerAddress",
+		Usage:    "QuotaManager address for the destination chain",
+		Category: processorCategory,
+		Required: false,
+		EnvVars:  []string{"DEST_QUOTA_MANAGER_ADDRESS"},
+	}
 )
 
 var ProcessorFlags = MergeFlags(CommonFlags, QueueFlags, TxmgrFlags, []cli.Flag{
@@ -151,4 +165,6 @@ var ProcessorFlags = MergeFlags(CommonFlags, QueueFlags, TxmgrFlags, []cli.Flag{
 	TargetTxHash,
 	CacheOption,
 	UnprofitableMessageQueueExpiration,
+	MaxMessageRetries,
+	DestQuotaManagerAddress,
 })

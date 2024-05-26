@@ -13,6 +13,20 @@ export enum TokenType {
   ERC1155 = 'ERC1155',
 }
 
+export enum TokenAttributeKey {
+  Mintable = 'mintable',
+  Wrapped = 'wrapped',
+  Stablecoin = 'stablecoin',
+  Supported = 'supported',
+}
+
+export type TokenAttributes = {
+  [TokenAttributeKey.Mintable]?: boolean;
+  [TokenAttributeKey.Wrapped]?: boolean;
+  [TokenAttributeKey.Stablecoin]?: boolean;
+  [TokenAttributeKey.Supported]?: boolean;
+};
+
 export type Token = {
   type: TokenType;
   name: string;
@@ -21,11 +35,11 @@ export type Token = {
   decimals: number;
   logoURI?: string;
   imported?: boolean;
-  mintable?: boolean;
   balance?: bigint;
+  attributes?: TokenAttributes[];
 };
 
-export type NFT = Token & {
+export type NFT = Omit<Token, 'decimals'> & {
   tokenId: number;
   uri?: string;
   metadata?: NFTMetadata;
@@ -34,14 +48,14 @@ export type NFT = Token & {
 // Based on https://docs.opensea.io/docs/metadata-standards
 export type NFTMetadata = {
   description: string;
-  external_url: string;
+  external_url?: string;
   image: string;
   name: string;
   //todo: more metadata?
 };
 
 export type GetTokenInfo = {
-  token: Token;
+  token: Token | NFT;
   srcChainId: number;
   destChainId: number;
 };

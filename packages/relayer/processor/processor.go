@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -30,11 +30,13 @@ import (
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/erc1155vault"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/erc20vault"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/erc721vault"
+	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/quotamanager"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/signalservice"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/taikol2"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/proof"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/queue"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/repo"
+	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/utils"
 )
 
 type DB interface {
@@ -54,6 +56,8 @@ type ethClient interface {
 	SuggestGasPrice(ctx context.Context) (*big.Int, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	ChainID(ctx context.Context) (*big.Int, error)
+	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
+	EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error)
 }
 
 // hop is a struct which needs to be created based on the config parameters
@@ -92,6 +96,7 @@ type Processor struct {
 	destERC20Vault   relayer.TokenVault
 	destERC1155Vault relayer.TokenVault
 	destERC721Vault  relayer.TokenVault
+	destQuotaManager relayer.QuotaManager
 
 	prover *proof.Prover
 
@@ -125,6 +130,8 @@ type Processor struct {
 	cfg *Config
 
 	txmgr txmgr.TxManager
+
+	maxMessageRetries uint64
 }
 
 // InitFromCli creates a new processor from a cli context
@@ -228,6 +235,20 @@ func InitFromConfig(ctx context.Context, p *Processor, cfg *Config) error {
 	)
 	if err != nil {
 		return err
+	}
+
+	var destQuotaManager *quotamanager.QuotaManager
+
+	if cfg.DestQuotaManagerAddress.Hex() != relayer.ZeroAddress.Hex() {
+		destQuotaManager, err = quotamanager.NewQuotaManager(
+			cfg.DestQuotaManagerAddress,
+			destEthClient,
+		)
+		if err != nil {
+			return err
+		}
+
+		p.destQuotaManager = destQuotaManager
 	}
 
 	var destERC721Vault *erc721vault.ERC721Vault
@@ -346,6 +367,8 @@ func InitFromConfig(ctx context.Context, p *Processor, cfg *Config) error {
 
 	p.targetTxHash = cfg.TargetTxHash
 
+	p.maxMessageRetries = cfg.MaxMessageRetries
+
 	return nil
 }
 
@@ -401,6 +424,14 @@ func (p *Processor) Start() error {
 
 	go p.eventLoop(ctx)
 
+	go func() {
+		if err := backoff.Retry(func() error {
+			return utils.ScanBlocks(ctx, p.srcEthClient, p.wg)
+		}, backoff.NewConstantBackOff(5*time.Second)); err != nil {
+			slog.Error("scan blocks backoff retry", "error", err)
+		}
+	}()
+
 	return nil
 }
 
@@ -421,7 +452,7 @@ func (p *Processor) eventLoop(ctx context.Context) {
 			return
 		case msg := <-p.msgCh:
 			go func(m queue.Message) {
-				shouldRequeue, err := p.processMessage(ctx, m)
+				shouldRequeue, timesRetried, err := p.processMessage(ctx, m)
 
 				if err != nil {
 					switch {
@@ -430,26 +461,17 @@ func (p *Processor) eventLoop(ctx context.Context) {
 							slog.Error("Err acking message", "err", err.Error())
 						}
 					case errors.Is(err, relayer.ErrUnprofitable):
-						// we want to add it to the unprofitable queue, to be iterated
-						// and picked up by a processor that will periodically check
-						// if the messages are now estimated to be profitable, rather than
-						// just discard those messages.
-						marshalled, err := json.Marshal(m)
-						if err != nil {
-							slog.Error("error marshaling queue message", "error", err)
-							// if we cant marshal it, we cant publish it. we should negatively acknowledge
-							// the emssage so it goes to the dead letter queue.
-							if err := p.queue.Nack(ctx, m, shouldRequeue); err != nil {
-								slog.Error("Err nacking message", "err", err.Error())
-							}
+						slog.Info("publishing to unprofitable queue")
 
-							return
-						}
+						headers := make(map[string]interface{}, 0)
+
+						headers["retries"] = int64(timesRetried + 1)
 
 						if err := p.queue.Publish(
 							ctx,
 							fmt.Sprintf("%v-unprofitable", p.queueName()),
-							marshalled,
+							m.Body,
+							headers,
 							p.cfg.UnprofitableMessageQueueExpiration,
 						); err != nil {
 							slog.Error("error publishing to unprofitable queue", "error", err)
@@ -459,6 +481,14 @@ func (p *Processor) eventLoop(ctx context.Context) {
 						// from our main queue.
 						if err := p.queue.Ack(ctx, m); err != nil {
 							slog.Error("Err acking message", "err", err.Error())
+						}
+					case errors.Is(err, context.Canceled):
+						slog.Error("process message failed due to context cancel", "err", err.Error())
+
+						// we want to negatively acknowledge the message and make sure
+						// we requeue it
+						if err := p.queue.Nack(ctx, m, true); err != nil {
+							slog.Error("Err nacking message", "err", err.Error())
 						}
 					default:
 						slog.Error("process message failed", "err", err.Error())
@@ -473,9 +503,17 @@ func (p *Processor) eventLoop(ctx context.Context) {
 					return
 				}
 
-				// otherwise if no error, we can acknowledge it successfully.
-				if err := p.queue.Ack(ctx, m); err != nil {
-					slog.Error("Err acking message", "err", err.Error())
+				if shouldRequeue {
+					// we want to negatively acknowledge the message and make sure
+					// we requeue it
+					if err := p.queue.Nack(ctx, m, true); err != nil {
+						slog.Error("Err nacking message", "err", err.Error())
+					}
+				} else {
+					// otherwise if no error, we can acknowledge it successfully.
+					if err := p.queue.Ack(ctx, m); err != nil {
+						slog.Error("Err acking message", "err", err.Error())
+					}
 				}
 			}(msg)
 		}

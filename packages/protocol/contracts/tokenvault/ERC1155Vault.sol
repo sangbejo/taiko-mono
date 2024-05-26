@@ -3,23 +3,10 @@ pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC1155/utils/ERC1155ReceiverUpgradeable.sol";
-import "../bridge/IBridge.sol";
 import "../libs/LibAddress.sol";
+import "../common/LibStrings.sol";
+import "./IBridgedERC1155.sol";
 import "./BaseNFTVault.sol";
-import "./BridgedERC1155.sol";
-
-/// @title IERC1155NameAndSymbol
-/// @notice Interface for ERC1155 contracts that provide name() and symbol()
-/// functions. These functions may not be part of the official interface but are
-/// used by some contracts.
-/// @custom:security-contact security@taiko.xyz
-interface IERC1155NameAndSymbol {
-    /// @notice Returns the name of the token.
-    function name() external view returns (string memory);
-
-    /// @notice Returns the symbol of the token.
-    function symbol() external view returns (string memory);
-}
 
 /// @title ERC1155Vault
 /// @dev Labeled in AddressResolver as "erc1155_vault"
@@ -31,28 +18,38 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
 
     uint256[50] private __gap;
 
+    /// @notice Initializes the contract.
+    /// @param _owner The owner of this contract. msg.sender will be used if this value is zero.
+    /// @param _addressManager The address of the {AddressManager} contract.
+    function init(address _owner, address _addressManager) external initializer {
+        __Essential_init(_owner, _addressManager);
+        __ERC1155Receiver_init();
+    }
     /// @notice Transfers ERC1155 tokens to this vault and sends a message to
     /// the destination chain so the user can receive the same (bridged) tokens
     /// by invoking the message call.
     /// @param _op Option for sending the ERC1155 token.
     /// @return message_ The constructed message.
-    function sendToken(BridgeTransferOp memory _op)
+
+    function sendToken(BridgeTransferOp calldata _op)
         external
         payable
-        nonReentrant
         whenNotPaused
         withValidOperation(_op)
+        nonReentrant
         returns (IBridge.Message memory message_)
     {
+        if (msg.value < _op.fee) revert VAULT_INSURFICIENT_FEE();
+
         for (uint256 i; i < _op.amounts.length; ++i) {
             if (_op.amounts[i] == 0) revert VAULT_INVALID_AMOUNT();
         }
         // Check token interface support
-        if (!_op.token.supportsInterface(ERC1155_INTERFACE_ID)) {
+        if (!_op.token.supportsInterface(type(IERC1155).interfaceId)) {
             revert VAULT_INTERFACE_NOT_SUPPORTED();
         }
 
-        (bytes memory data, CanonicalNFT memory ctoken) = _handleMessage(msg.sender, _op);
+        (bytes memory data, CanonicalNFT memory ctoken) = _handleMessage(_op);
 
         // Create a message to send to the destination chain
         IBridge.Message memory message = IBridge.Message({
@@ -63,18 +60,16 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
             srcOwner: msg.sender,
             destOwner: _op.destOwner != address(0) ? _op.destOwner : msg.sender,
             to: resolve(_op.destChainId, name(), false),
-            refundTo: _op.refundTo,
             value: msg.value - _op.fee,
             fee: _op.fee,
             gasLimit: _op.gasLimit,
-            data: data,
-            memo: _op.memo
+            data: data
         });
 
         // Send the message and obtain the message hash
         bytes32 msgHash;
         (msgHash, message_) =
-            IBridge(resolve("bridge", false)).sendMessage{ value: msg.value }(message);
+            IBridge(resolve(LibStrings.B_BRIDGE, false)).sendMessage{ value: msg.value }(message);
 
         // Emit TokenSent event
         emit TokenSent({
@@ -90,7 +85,7 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
     }
 
     /// @inheritdoc IMessageInvocable
-    function onMessageInvocation(bytes calldata data) external payable nonReentrant whenNotPaused {
+    function onMessageInvocation(bytes calldata data) external payable whenNotPaused nonReentrant {
         (
             CanonicalNFT memory ctoken,
             address from,
@@ -105,7 +100,7 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
 
         // Don't allow sending to disallowed addresses.
         // Don't send the tokens back to `from` because `from` is on the source chain.
-        if (to == address(0) || to == address(this)) revert VAULT_INVALID_TO();
+        checkToAddress(to);
 
         // Transfer the ETH and the tokens to the `to` address
         address token = _transferTokens(ctoken, to, tokenIds, amounts);
@@ -131,8 +126,8 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
         external
         payable
         override
-        nonReentrant
         whenNotPaused
+        nonReentrant
     {
         // `onlyFromBridge` checked in checkRecallMessageContext
         checkRecallMessageContext();
@@ -187,22 +182,22 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
     }
 
     /// @dev See {BaseVault-supportsInterface}.
-    /// @param interfaceId The interface identifier.
+    /// @param _interfaceId The interface identifier.
     /// @return true if supports, else otherwise.
-    function supportsInterface(bytes4 interfaceId)
+    function supportsInterface(bytes4 _interfaceId)
         public
         view
-        virtual
         override(BaseVault, ERC1155ReceiverUpgradeable)
         returns (bool)
     {
-        return interfaceId == type(ERC1155ReceiverUpgradeable).interfaceId
-            || BaseVault.supportsInterface(interfaceId);
+        // Here we cannot user `super.supportsInterface(_interfaceId)`
+        return BaseVault.supportsInterface(_interfaceId)
+            || ERC1155ReceiverUpgradeable.supportsInterface(_interfaceId);
     }
 
     /// @inheritdoc BaseVault
     function name() public pure override returns (bytes32) {
-        return "erc1155_vault";
+        return LibStrings.B_ERC1155_VAULT;
     }
 
     /// @dev Transfers ERC1155 tokens to the `to` address.
@@ -227,58 +222,47 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
         } else {
             // Token does not live on this chain
             token = _getOrDeployBridgedToken(ctoken);
-            BridgedERC1155(token).mintBatch(to, tokenIds, amounts);
+            IBridgedERC1155(token).mintBatch(to, tokenIds, amounts);
         }
     }
 
     /// @dev Handles the message on the source chain and returns the encoded
     /// call on the destination call.
-    /// @param _user The user's address.
     /// @param _op BridgeTransferOp data.
     /// @return msgData_ Encoded message data.
     /// @return ctoken_ The canonical token.
-    function _handleMessage(
-        address _user,
-        BridgeTransferOp memory _op
-    )
+    function _handleMessage(BridgeTransferOp calldata _op)
         private
         returns (bytes memory msgData_, CanonicalNFT memory ctoken_)
     {
         unchecked {
             // is a btoken, meaning, it does not live on this chain
-            if (bridgedToCanonical[_op.token].addr != address(0)) {
-                ctoken_ = bridgedToCanonical[_op.token];
+            CanonicalNFT storage _ctoken = bridgedToCanonical[_op.token];
+            if (_ctoken.addr != address(0)) {
+                ctoken_ = _ctoken;
+                IERC1155(_op.token).safeBatchTransferFrom(
+                    msg.sender, address(this), _op.tokenIds, _op.amounts, ""
+                );
                 for (uint256 i; i < _op.tokenIds.length; ++i) {
-                    BridgedERC1155(_op.token).burn(_user, _op.tokenIds[i], _op.amounts[i]);
+                    IBridgedERC1155(_op.token).burn(_op.tokenIds[i], _op.amounts[i]);
                 }
             } else {
                 // is a ctoken token, meaning, it lives on this chain
                 ctoken_ = CanonicalNFT({
                     chainId: uint64(block.chainid),
                     addr: _op.token,
-                    symbol: "",
-                    name: ""
+                    symbol: safeSymbol(_op.token),
+                    name: safeName(_op.token)
                 });
-                IERC1155NameAndSymbol t = IERC1155NameAndSymbol(_op.token);
-                try t.name() returns (string memory _name) {
-                    ctoken_.name = _name;
-                } catch { }
-                try t.symbol() returns (string memory _symbol) {
-                    ctoken_.symbol = _symbol;
-                } catch { }
-                for (uint256 i; i < _op.tokenIds.length; ++i) {
-                    IERC1155(_op.token).safeTransferFrom({
-                        from: msg.sender,
-                        to: address(this),
-                        id: _op.tokenIds[i],
-                        amount: _op.amounts[i],
-                        data: ""
-                    });
-                }
+
+                IERC1155(_op.token).safeBatchTransferFrom(
+                    msg.sender, address(this), _op.tokenIds, _op.amounts, ""
+                );
             }
         }
         msgData_ = abi.encodeCall(
-            this.onMessageInvocation, abi.encode(ctoken_, _user, _op.to, _op.tokenIds, _op.amounts)
+            this.onMessageInvocation,
+            abi.encode(ctoken_, msg.sender, _op.to, _op.tokenIds, _op.amounts)
         );
     }
 
@@ -302,11 +286,11 @@ contract ERC1155Vault is BaseNFTVault, ERC1155ReceiverUpgradeable {
     /// @return btoken_ Address of the deployed bridged token contract.
     function _deployBridgedToken(CanonicalNFT memory _ctoken) private returns (address btoken_) {
         bytes memory data = abi.encodeCall(
-            BridgedERC1155.init,
+            IBridgedERC1155Initializable.init,
             (owner(), addressManager, _ctoken.addr, _ctoken.chainId, _ctoken.symbol, _ctoken.name)
         );
 
-        btoken_ = address(new ERC1967Proxy(resolve("bridged_erc1155", false), data));
+        btoken_ = address(new ERC1967Proxy(resolve(LibStrings.B_BRIDGED_ERC1155, false), data));
 
         bridgedToCanonical[btoken_] = _ctoken;
         canonicalToBridged[_ctoken.chainId][_ctoken.addr] = btoken_;

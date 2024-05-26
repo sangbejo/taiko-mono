@@ -1,16 +1,29 @@
-import { healthCheckRoute, livenessRoute, uptimeRoute } from '$lib/routes';
-import type { HealthCheck, PageResponse, UptimeResponse } from '$lib/types';
+import {
+	healthCheckRoute,
+	livenessRoute,
+	mostRecentStartupRoute,
+	nodeInfoRoute,
+	uptimeRoute
+} from '$lib/routes';
+import type {
+	HealthCheck,
+	NodeInfoResponse,
+	PageResponse,
+	StartupResponse,
+	UptimeResponse
+} from '$lib/types';
 import axios from 'axios';
+import type { Address } from 'viem';
 
 export async function fetchGuardianProverHealthChecksFromApi(
 	baseURL: string,
 	page: number,
 	size: number,
-	guardianProverId?: number
+	guardianProverAddress?: Address
 ): Promise<PageResponse<HealthCheck>> {
 	let url;
-	if (guardianProverId) {
-		url = `${baseURL}/${healthCheckRoute}/${guardianProverId}`;
+	if (guardianProverAddress) {
+		url = `${baseURL}/${healthCheckRoute}/${guardianProverAddress}`;
 	} else {
 		url = `${baseURL}/${healthCheckRoute}`;
 	}
@@ -25,11 +38,11 @@ export async function fetchGuardianProverHealthChecksFromApi(
 	return resp.data;
 }
 
-export async function fetchLatestGuardianProverHealtCheckFromApi(
+export async function fetchLatestGuardianProverHealthCheckFromApi(
 	baseURL: string,
-	guardianProverId: number
+	guardianProverAddress: Address
 ): Promise<HealthCheck> {
-	const url = `${baseURL}/${livenessRoute}/${guardianProverId}`;
+	const url = `${baseURL}/${livenessRoute}/${guardianProverAddress}`;
 
 	const resp = await axios.get<HealthCheck>(url);
 
@@ -38,11 +51,27 @@ export async function fetchLatestGuardianProverHealtCheckFromApi(
 
 export async function fetchUptimeFromApi(
 	baseURL: string,
-	guardianProverId: number
+	guardianProverAddress: Address
 ): Promise<number> {
-	const url = `${baseURL}/${uptimeRoute}/${guardianProverId}`;
+	const url = `${baseURL}/${uptimeRoute}/${guardianProverAddress}`;
 
 	const resp = await axios.get<UptimeResponse>(url);
 
 	return resp.data.uptime;
+}
+
+export async function fetchStartupDataFromApi(baseURL: string, guardianProverAddress: Address) {
+	const url = `${baseURL}/${mostRecentStartupRoute}/${guardianProverAddress}`;
+
+	const resp = await axios.get<StartupResponse>(url);
+
+	return resp.data;
+}
+
+export async function fetchNodeInfoFromApi(baseURL: string, guardianProverAddress: Address) {
+	const url = `${baseURL}/${nodeInfoRoute}/${guardianProverAddress}`;
+
+	const resp = await axios.get<NodeInfoResponse>(url);
+
+	return resp.data;
 }

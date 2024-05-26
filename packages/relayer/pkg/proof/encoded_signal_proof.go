@@ -4,8 +4,6 @@ import (
 	"context"
 	"math/big"
 
-	"log/slog"
-
 	"github.com/taikoxyz/taiko-mono/packages/relayer"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/encoding"
 
@@ -39,8 +37,6 @@ func (p *Prover) abiEncodeSignalProofWithHops(ctx context.Context,
 	hopProofs := []encoding.HopProof{}
 
 	for _, hop := range hopParams {
-		slog.Info("generating hop proof")
-
 		block, err := hop.Blocker.BlockByNumber(
 			ctx,
 			new(big.Int).SetUint64(hop.BlockNumber),
@@ -59,12 +55,6 @@ func (p *Prover) abiEncodeSignalProofWithHops(ctx context.Context,
 		if err != nil {
 			return nil, errors.Wrap(err, "hop p.getEncodedMerkleProof")
 		}
-
-		slog.Info("generated hop proof",
-			"chainID", hop.ChainID.Uint64(),
-			"blockID", block.NumberU64(),
-			"rootHash", block.Root(),
-		)
 
 		hopProofs = append(hopProofs, encoding.HopProof{
 			BlockID:      block.NumberU64(),
@@ -97,12 +87,6 @@ func (p *Prover) getProof(
 ) (*StorageProof, error) {
 	var ethProof StorageProof
 
-	slog.Info("getting proof",
-		"signalServiceAddress", signalServiceAddress.Hex(),
-		"key", key,
-		"blockNum", blockNumber,
-	)
-
 	err := c.CallContext(ctx,
 		&ethProof,
 		"eth_getProof",
@@ -113,10 +97,6 @@ func (p *Prover) getProof(
 	if err != nil {
 		return nil, errors.Wrap(err, "c.CallContext")
 	}
-
-	slog.Info("proof generated",
-		"value", common.Bytes2Hex(ethProof.StorageProof[0].Value),
-	)
 
 	if new(big.Int).SetBytes(ethProof.StorageProof[0].Value).Int64() == int64(0) {
 		return nil, errors.New("proof will not be valid, expected storageProof to not be 0 but was not")

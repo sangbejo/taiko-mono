@@ -26,6 +26,22 @@ abstract contract AddressResolver is IAddressResolver, Initializable {
         _;
     }
 
+    /// @dev Modifier that ensures the caller is a resolved address to either _name1 or _name2
+    /// name.
+    /// @param _name1 The first name to check against.
+    /// @param _name2 The second name to check against.
+    modifier onlyFromNamedEither(bytes32 _name1, bytes32 _name2) {
+        if (msg.sender != resolve(_name1, true) && msg.sender != resolve(_name2, true)) {
+            revert RESOLVER_DENIED();
+        }
+        _;
+    }
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /// @inheritdoc IAddressResolver
     function resolve(
         bytes32 _name,
@@ -78,9 +94,10 @@ abstract contract AddressResolver is IAddressResolver, Initializable {
         view
         returns (address payable addr_)
     {
-        if (addressManager == address(0)) revert RESOLVER_INVALID_MANAGER();
+        address _addressManager = addressManager;
+        if (_addressManager == address(0)) revert RESOLVER_INVALID_MANAGER();
 
-        addr_ = payable(IAddressManager(addressManager).getAddress(_chainId, _name));
+        addr_ = payable(IAddressManager(_addressManager).getAddress(_chainId, _name));
 
         if (!_allowZeroAddress && addr_ == address(0)) {
             revert RESOLVER_ZERO_ADDR(_chainId, _name);

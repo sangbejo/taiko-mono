@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20VotesUpgradeable.sol";
 import "../common/EssentialContract.sol";
+import "../common/LibStrings.sol";
 import "../libs/LibAddress.sol";
-import "../libs/LibNetwork.sol";
+import "../libs/LibMath.sol";
 import "../signal/ISignalService.sol";
 import "./IBridge.sol";
+import "./IQuotaManager.sol";
 
 /// @title Bridge
 /// @notice See the documentation for {IBridge}.
@@ -15,62 +17,88 @@ import "./IBridge.sol";
 /// @custom:security-contact security@taiko.xyz
 contract Bridge is EssentialContract, IBridge {
     using Address for address;
+    using LibMath for uint256;
     using LibAddress for address;
     using LibAddress for address payable;
+
+    struct ProcessingStats {
+        uint32 gasUsedInFeeCalc;
+        uint32 proofSize;
+        uint32 numCacheOps;
+    }
+
+    /// @dev A debug event for fine-tuning gas related constants in the future.
+    event MessageProcessed(bytes32 indexed msgHash, Message message, ProcessingStats stats);
+
+    /// @dev The amount of gas that will be deducted from message.gasLimit before calculating the
+    /// invocation gas limit. This value should be fine-tuned with production data.
+    uint32 public constant GAS_RESERVE = 800_000;
+
+    /// @dev The gas overhead for both receiving and invoking a message, as well as the proof
+    /// calldata cost.
+    /// This value should be fine-tuned with production data.
+    uint32 public constant GAS_OVERHEAD = 120_000;
+
+    /// @dev The amount of gas not to charge fee per cache operation.
+    uint256 private constant _GAS_REFUND_PER_CACHE_OPERATION = 20_000;
 
     /// @dev The slot in transient storage of the call context. This is the keccak256 hash
     /// of "bridge.ctx_slot"
     bytes32 private constant _CTX_SLOT =
         0xe4ece82196de19aabe639620d7f716c433d1348f96ce727c9989a982dbadc2b9;
 
+    /// @dev Gas limit for sending Ether.
+    // - EOA gas used is < 21000
+    // - For Loopring smart wallet, gas used is about 23000
+    // - For Argent smart wallet on Ethereum, gas used is about 24000
+    // - For Gnosis Safe wallet, gas used is about 28000
+    uint256 private constant _SEND_ETHER_GAS_LIMIT = 35_000;
+
     /// @dev Place holder value when not using transient storage
-    uint256 internal constant PLACEHOLDER = type(uint256).max;
+    uint256 private constant _PLACEHOLDER = type(uint256).max;
 
     /// @notice The next message ID.
     /// @dev Slot 1.
-    uint128 public nextMessageId;
+    uint64 private __reserved1;
+    uint64 public nextMessageId;
 
     /// @notice Mapping to store the status of a message from its hash.
     /// @dev Slot 2.
     mapping(bytes32 msgHash => Status status) public messageStatus;
 
-    /// @dev Slots 3, 4, and 5.
+    /// @dev Slots 3 and 4
     Context private __ctx;
 
-    /// @notice Mapping to store banned addresses.
+    /// @dev Slot 5.
+    uint256 private __reserved2;
+
     /// @dev Slot 6.
-    mapping(address addr => bool banned) public addressBanned;
+    uint256 private __reserved3;
 
-    /// @notice Mapping to store the proof receipt of a message from its hash.
-    /// @dev Slot 7.
-    mapping(bytes32 msgHash => ProofReceipt receipt) public proofReceipt;
-
-    uint256[43] private __gap;
+    uint256[44] private __gap;
 
     error B_INVALID_CHAINID();
     error B_INVALID_CONTEXT();
+    error B_INVALID_FEE();
     error B_INVALID_GAS_LIMIT();
     error B_INVALID_STATUS();
-    error B_INVALID_USER();
     error B_INVALID_VALUE();
-    error B_MESSAGE_NOT_PROVEN();
+    error B_INSUFFICIENT_GAS();
     error B_MESSAGE_NOT_SENT();
-    error B_MESSAGE_NOT_SUSPENDED();
-    error B_MESSAGE_SUSPENDED();
-    error B_NON_RETRIABLE();
-    error B_NOT_FAILED();
-    error B_NOT_RECEIVED();
+    error B_OUT_OF_ETH_QUOTA();
     error B_PERMISSION_DENIED();
-    error B_STATUS_MISMATCH();
-    error B_INVOCATION_TOO_EARLY();
+    error B_RETRY_FAILED();
+    error B_SIGNAL_NOT_RECEIVED();
 
     modifier sameChain(uint64 _chainId) {
         if (_chainId != block.chainid) revert B_INVALID_CHAINID();
         _;
     }
 
-    /// @notice Function to receive Ether.
-    receive() external payable { }
+    modifier diffChain(uint64 _chainId) {
+        if (_chainId == 0 || _chainId == block.chainid) revert B_INVALID_CHAINID();
+        _;
+    }
 
     /// @notice Initializes the contract.
     /// @param _owner The owner of this contract. msg.sender will be used if this value is zero.
@@ -79,54 +107,17 @@ contract Bridge is EssentialContract, IBridge {
         __Essential_init(_owner, _addressManager);
     }
 
-    /// @notice Suspend or unsuspend invocation for a list of messages.
-    /// @param _msgHashes The array of msgHashes to be suspended.
-    /// @param _suspend True if suspend, false if unsuspend.
-    function suspendMessages(
-        bytes32[] calldata _msgHashes,
-        bool _suspend
-    )
-        external
-        onlyFromOwnerOrNamed("bridge_watchdog")
-    {
-        for (uint256 i; i < _msgHashes.length; ++i) {
-            bytes32 msgHash = _msgHashes[i];
-
-            if (_suspend) {
-                if (proofReceipt[msgHash].receivedAt == 0) revert B_MESSAGE_NOT_PROVEN();
-                if (proofReceipt[msgHash].receivedAt == type(uint64).max) {
-                    revert B_MESSAGE_SUSPENDED();
-                }
-
-                proofReceipt[msgHash].receivedAt = type(uint64).max;
-                emit MessageSuspended(msgHash, true, 0);
-            } else {
-                // Note before we set the receivedAt to current timestamp, we have to be really
-                // careful that this message must have been proven then suspended.
-                if (proofReceipt[msgHash].receivedAt != type(uint64).max) {
-                    revert B_MESSAGE_NOT_SUSPENDED();
-                }
-                proofReceipt[msgHash].receivedAt = uint64(block.timestamp);
-                emit MessageSuspended(msgHash, false, uint64(block.timestamp));
-            }
-        }
+    function init2() external onlyOwner reinitializer(2) {
+        // reset some previously used slots for future reuse
+        __reserved1 = 0;
+        __reserved2 = 0;
+        __reserved3 = 0;
     }
 
-    /// @notice Ban or unban an address. A banned addresses will not be invoked upon
-    /// with message calls.
-    /// @dev Do not make this function `nonReentrant`, this breaks {DelegateOwner} support.
-    /// @param _addr The address to ban or unban.
-    /// @param _ban True if ban, false if unban.
-    function banAddress(
-        address _addr,
-        bool _ban
-    )
-        external
-        onlyFromOwnerOrNamed("bridge_watchdog")
-    {
-        if (addressBanned[_addr] == _ban) revert B_INVALID_STATUS();
-        addressBanned[_addr] = _ban;
-        emit AddressBanned(_addr, _ban);
+    /// @notice Delegates a given token's voting power to the bridge itself.
+    /// @param _anyToken Any token that supports delegation.
+    function selfDelegate(address _anyToken) external nonZeroAddr(_anyToken) {
+        ERC20VotesUpgradeable(_anyToken).delegate(address(this));
     }
 
     /// @inheritdoc IBridge
@@ -134,27 +125,27 @@ contract Bridge is EssentialContract, IBridge {
         external
         payable
         override
-        nonReentrant
+        nonZeroAddr(_message.srcOwner)
+        nonZeroAddr(_message.destOwner)
+        diffChain(_message.destChainId)
         whenNotPaused
+        nonReentrant
         returns (bytes32 msgHash_, Message memory message_)
     {
-        // Ensure the message owner is not null.
-        if (_message.srcOwner == address(0) || _message.destOwner == address(0)) {
-            revert B_INVALID_USER();
+        if (_message.gasLimit == 0) {
+            if (_message.fee != 0) revert B_INVALID_FEE();
+        } else if (_invocationGasLimit(_message, false) == 0) {
+            revert B_INVALID_GAS_LIMIT();
         }
 
         // Check if the destination chain is enabled.
         (bool destChainEnabled,) = isDestChainEnabled(_message.destChainId);
 
-        // Verify destination chain and to address.
+        // Verify destination chain.
         if (!destChainEnabled) revert B_INVALID_CHAINID();
-        if (_message.destChainId == block.chainid) {
-            revert B_INVALID_CHAINID();
-        }
 
         // Ensure the sent value matches the expected amount.
-        uint256 expectedAmount = _message.value + _message.fee;
-        if (expectedAmount != msg.value) revert B_INVALID_VALUE();
+        if (_message.value + _message.fee != msg.value) revert B_INVALID_VALUE();
 
         message_ = _message;
 
@@ -165,8 +156,8 @@ contract Bridge is EssentialContract, IBridge {
 
         msgHash_ = hashMessage(message_);
 
-        ISignalService(resolve("signal_service", false)).sendSignal(msgHash_);
         emit MessageSent(msgHash_, message_);
+        ISignalService(resolve(LibStrings.B_SIGNAL_SERVICE, false)).sendSignal(msgHash_);
     }
 
     /// @inheritdoc IBridge
@@ -175,161 +166,132 @@ contract Bridge is EssentialContract, IBridge {
         bytes calldata _proof
     )
         external
-        nonReentrant
-        whenNotPaused
         sameChain(_message.srcChainId)
+        diffChain(_message.destChainId)
+        whenNotPaused
+        nonReentrant
     {
         bytes32 msgHash = hashMessage(_message);
+        _checkStatus(msgHash, Status.NEW);
 
-        if (messageStatus[msgHash] != Status.NEW) revert B_STATUS_MISMATCH();
+        address signalService = resolve(LibStrings.B_SIGNAL_SERVICE, false);
 
-        uint64 receivedAt = proofReceipt[msgHash].receivedAt;
-        if (receivedAt == type(uint64).max) revert B_MESSAGE_SUSPENDED();
-
-        (uint256 invocationDelay,) = getInvocationDelays();
-
-        bool isNewlyProven;
-        if (receivedAt == 0) {
-            address signalService = resolve("signal_service", false);
-
-            if (!ISignalService(signalService).isSignalSent(address(this), msgHash)) {
-                revert B_MESSAGE_NOT_SENT();
-            }
-
-            bytes32 failureSignal = signalForFailedMessage(msgHash);
-            if (!_proveSignalReceived(signalService, failureSignal, _message.destChainId, _proof)) {
-                revert B_NOT_FAILED();
-            }
-
-            receivedAt = uint64(block.timestamp);
-            isNewlyProven = true;
-
-            if (invocationDelay != 0) {
-                proofReceipt[msgHash].receivedAt = receivedAt;
-            }
+        if (!ISignalService(signalService).isSignalSent(address(this), msgHash)) {
+            revert B_MESSAGE_NOT_SENT();
         }
 
-        if (block.timestamp >= invocationDelay + receivedAt) {
-            delete proofReceipt[msgHash];
-            messageStatus[msgHash] = Status.RECALLED;
+        _proveSignalReceived(
+            signalService, signalForFailedMessage(msgHash), _message.destChainId, _proof
+        );
 
-            // Execute the recall logic based on the contract's support for the
-            // IRecallableSender interface
-            if (_message.from.supportsInterface(type(IRecallableSender).interfaceId)) {
-                _storeContext(msgHash, address(this), _message.srcChainId);
+        _updateMessageStatus(msgHash, Status.RECALLED);
+        if (!_consumeEtherQuota(_message.value)) revert B_OUT_OF_ETH_QUOTA();
 
-                // Perform recall
-                IRecallableSender(_message.from).onMessageRecalled{ value: _message.value }(
-                    _message, msgHash
-                );
+        // Execute the recall logic based on the contract's support for the
+        // IRecallableSender interface
+        if (_message.from.supportsInterface(type(IRecallableSender).interfaceId)) {
+            _storeContext(msgHash, address(this), _message.srcChainId);
 
-                // Must reset the context after the message call
-                _resetContext();
-            } else {
-                _message.srcOwner.sendEtherAndVerify(_message.value);
-            }
-            emit MessageRecalled(msgHash);
-        } else if (isNewlyProven) {
-            emit MessageReceived(msgHash, _message, true);
+            // Perform recall
+            IRecallableSender(_message.from).onMessageRecalled{ value: _message.value }(
+                _message, msgHash
+            );
+
+            // Must reset the context after the message call
+            _resetContext();
         } else {
-            revert B_INVOCATION_TOO_EARLY();
+            _message.srcOwner.sendEtherAndVerify(_message.value, _SEND_ETHER_GAS_LIMIT);
         }
     }
 
     /// @inheritdoc IBridge
+    /// @dev This transaction's gas limit must not be smaller than:
+    /// `(message.gasLimit - GAS_RESERVE) * 64 / 63 + GAS_RESERVE`,
+    /// Or we can use a simplified rule: `tx.gaslimit = message.gaslimit * 102%`.
     function processMessage(
         Message calldata _message,
         bytes calldata _proof
     )
         external
-        nonReentrant
         whenNotPaused
-        sameChain(_message.destChainId)
+        nonReentrant
+        returns (Status status_, StatusReason reason_)
     {
+        uint256 gasStart = gasleft();
+
+        // same as `sameChain(_message.destChainId)` but without stack-too-deep
+        if (_message.destChainId != block.chainid) revert B_INVALID_CHAINID();
+
+        // same as `diffChain(_message.srcChainId)` but without stack-too-deep
+        if (_message.srcChainId == 0 || _message.srcChainId == block.chainid) {
+            revert B_INVALID_CHAINID();
+        }
+
+        // If the gas limit is set to zero, only the owner can process the message.
+        if (_message.gasLimit == 0 && msg.sender != _message.destOwner) {
+            revert B_PERMISSION_DENIED();
+        }
+
         bytes32 msgHash = hashMessage(_message);
-        if (messageStatus[msgHash] != Status.NEW) revert B_STATUS_MISMATCH();
+        _checkStatus(msgHash, Status.NEW);
 
-        address signalService = resolve("signal_service", false);
+        address signalService = resolve(LibStrings.B_SIGNAL_SERVICE, false);
 
-        uint64 receivedAt = proofReceipt[msgHash].receivedAt;
-        if (receivedAt == type(uint64).max) revert B_MESSAGE_SUSPENDED();
+        ProcessingStats memory stats;
+        stats.proofSize = uint32(_proof.length);
+        stats.numCacheOps =
+            _proveSignalReceived(signalService, msgHash, _message.srcChainId, _proof);
 
-        (uint256 invocationDelay, uint256 invocationExtraDelay) = getInvocationDelays();
-
-        bool isNewlyProven;
-        if (receivedAt == 0) {
-            if (!_proveSignalReceived(signalService, msgHash, _message.srcChainId, _proof)) {
-                revert B_NOT_RECEIVED();
-            }
-
-            receivedAt = uint64(block.timestamp);
-            isNewlyProven = true;
-
-            if (invocationDelay != 0) {
-                proofReceipt[msgHash] = ProofReceipt({
-                    receivedAt: receivedAt,
-                    preferredExecutor: _message.gasLimit == 0 ? _message.destOwner : msg.sender
-                });
-            }
-        }
-
-        if (invocationDelay != 0 && msg.sender != proofReceipt[msgHash].preferredExecutor) {
-            // If msg.sender is not the one that proved the message, then there
-            // is an extra delay.
-            unchecked {
-                invocationDelay += invocationExtraDelay;
-            }
-        }
-
-        if (block.timestamp >= invocationDelay + receivedAt) {
-            // If the gas limit is set to zero, only the owner can process the message.
-            if (_message.gasLimit == 0 && msg.sender != _message.destOwner) {
-                revert B_PERMISSION_DENIED();
-            }
-
-            delete proofReceipt[msgHash];
-
+        if (!_consumeEtherQuota(_message.value + _message.fee)) {
+            if (msg.sender != _message.destOwner) revert B_OUT_OF_ETH_QUOTA();
+            status_ = Status.RETRIABLE;
+            reason_ = StatusReason.OUT_OF_ETH_QUOTA;
+        } else {
             uint256 refundAmount;
-
-            // Process message differently based on the target address
-            if (
-                _message.to == address(0) || _message.to == address(this)
-                    || _message.to == signalService || addressBanned[_message.to]
-            ) {
+            if (_unableToInvokeMessageCall(_message, signalService)) {
                 // Handle special addresses that don't require actual invocation but
                 // mark message as DONE
                 refundAmount = _message.value;
-                _updateMessageStatus(msgHash, Status.DONE);
+                status_ = Status.DONE;
+                reason_ = StatusReason.INVOCATION_PROHIBITED;
             } else {
-                // Use the remaining gas if called by a the destOwner, else
-                // use the specified gas limit.
-                uint256 gasLimit = msg.sender == _message.destOwner ? gasleft() : _message.gasLimit;
+                uint256 gasLimit = msg.sender == _message.destOwner
+                    ? gasleft() // ignore _message.gasLimit
+                    : _invocationGasLimit(_message, true);
 
                 if (_invokeMessageCall(_message, msgHash, gasLimit)) {
-                    _updateMessageStatus(msgHash, Status.DONE);
+                    status_ = Status.DONE;
+                    reason_ = StatusReason.INVOCATION_OK;
                 } else {
-                    _updateMessageStatus(msgHash, Status.RETRIABLE);
+                    status_ = Status.RETRIABLE;
+                    reason_ = StatusReason.INVOCATION_FAILED;
                 }
             }
 
-            // Determine the refund recipient
-            address refundTo =
-                _message.refundTo == address(0) ? _message.destOwner : _message.refundTo;
+            if (_message.fee != 0) {
+                refundAmount += _message.fee;
 
-            // Refund the processing fee
-            if (msg.sender == refundTo) {
-                refundTo.sendEtherAndVerify(_message.fee + refundAmount);
-            } else {
-                // If sender is another address, reward it and refund the rest
-                msg.sender.sendEtherAndVerify(_message.fee);
-                refundTo.sendEtherAndVerify(refundAmount);
+                if (msg.sender != _message.destOwner && _message.gasLimit != 0) {
+                    unchecked {
+                        uint256 refund = stats.numCacheOps * _GAS_REFUND_PER_CACHE_OPERATION;
+                        stats.gasUsedInFeeCalc = uint32(GAS_OVERHEAD + gasStart - gasleft());
+                        uint256 gasCharged = refund.max(stats.gasUsedInFeeCalc) - refund;
+                        uint256 maxFee = gasCharged * _message.fee / _message.gasLimit;
+                        uint256 baseFee = gasCharged * block.basefee;
+                        uint256 fee =
+                            (baseFee >= maxFee ? maxFee : (maxFee + baseFee) >> 1).min(_message.fee);
+
+                        refundAmount -= fee;
+                        msg.sender.sendEtherAndVerify(fee, _SEND_ETHER_GAS_LIMIT);
+                    }
+                }
             }
-            emit MessageExecuted(msgHash);
-        } else if (isNewlyProven) {
-            emit MessageReceived(msgHash, _message, false);
-        } else {
-            revert B_INVOCATION_TOO_EARLY();
+
+            _message.destOwner.sendEtherAndVerify(refundAmount, _SEND_ETHER_GAS_LIMIT);
         }
+
+        _updateMessageStatus(msgHash, status_);
+        emit MessageProcessed(msgHash, _message, stats);
     }
 
     /// @inheritdoc IBridge
@@ -338,74 +300,109 @@ contract Bridge is EssentialContract, IBridge {
         bool _isLastAttempt
     )
         external
-        nonReentrant
-        whenNotPaused
         sameChain(_message.destChainId)
+        diffChain(_message.srcChainId)
+        whenNotPaused
+        nonReentrant
     {
-        // If the gasLimit is set to 0 or isLastAttempt is true, the caller must
-        // be the message.destOwner.
-        if (_message.gasLimit == 0 || _isLastAttempt) {
-            if (msg.sender != _message.destOwner) revert B_PERMISSION_DENIED();
-        }
-
         bytes32 msgHash = hashMessage(_message);
-        if (messageStatus[msgHash] != Status.RETRIABLE) {
-            revert B_NON_RETRIABLE();
+        _checkStatus(msgHash, Status.RETRIABLE);
+
+        if (!_consumeEtherQuota(_message.value)) revert B_OUT_OF_ETH_QUOTA();
+
+        uint256 invocationGasLimit;
+        if (msg.sender != _message.destOwner) {
+            if (_message.gasLimit == 0 || _isLastAttempt) revert B_PERMISSION_DENIED();
+            invocationGasLimit = _invocationGasLimit(_message, true);
+        } else {
+            // The owner uses all gas left in message invocation
+            invocationGasLimit = gasleft();
         }
 
         // Attempt to invoke the messageCall.
-        if (_invokeMessageCall(_message, msgHash, gasleft())) {
+        if (_invokeMessageCall(_message, msgHash, invocationGasLimit)) {
             _updateMessageStatus(msgHash, Status.DONE);
         } else if (_isLastAttempt) {
             _updateMessageStatus(msgHash, Status.FAILED);
+
+            ISignalService(resolve(LibStrings.B_SIGNAL_SERVICE, false)).sendSignal(
+                signalForFailedMessage(msgHash)
+            );
+        } else {
+            revert B_RETRY_FAILED();
         }
-        emit MessageRetried(msgHash);
     }
 
     /// @inheritdoc IBridge
-    function isMessageSent(Message calldata _message) public view returns (bool) {
+    function failMessage(Message calldata _message)
+        external
+        sameChain(_message.destChainId)
+        diffChain(_message.srcChainId)
+        whenNotPaused
+        nonReentrant
+    {
+        if (msg.sender != _message.destOwner) revert B_PERMISSION_DENIED();
+
+        bytes32 msgHash = hashMessage(_message);
+        _checkStatus(msgHash, Status.RETRIABLE);
+
+        _updateMessageStatus(msgHash, Status.FAILED);
+        ISignalService(resolve(LibStrings.B_SIGNAL_SERVICE, false)).sendSignal(
+            signalForFailedMessage(msgHash)
+        );
+    }
+
+    /// @inheritdoc IBridge
+    function isMessageSent(Message calldata _message) external view returns (bool) {
         if (_message.srcChainId != block.chainid) return false;
-        return ISignalService(resolve("signal_service", false)).isSignalSent({
+        return ISignalService(resolve(LibStrings.B_SIGNAL_SERVICE, false)).isSignalSent({
             _app: address(this),
             _signal: hashMessage(_message)
         });
     }
 
     /// @notice Checks if a msgHash has failed on its destination chain.
+    /// This is the 'readonly' version of proveMessageFailed.
     /// @param _message The message.
     /// @param _proof The merkle inclusion proof.
     /// @return true if the message has failed, false otherwise.
-    function proveMessageFailed(
+    function isMessageFailed(
         Message calldata _message,
         bytes calldata _proof
     )
-        public
+        external
+        view
         returns (bool)
     {
         if (_message.srcChainId != block.chainid) return false;
 
-        return _proveSignalReceived(
-            resolve("signal_service", false),
+        return _isSignalReceived(
+            resolve(LibStrings.B_SIGNAL_SERVICE, false),
             signalForFailedMessage(hashMessage(_message)),
             _message.destChainId,
             _proof
         );
     }
 
-    /// @notice Checks if a msgHash has failed on its destination chain.
+    /// @notice Checks if a msgHash has been received on its source chain.
+    /// This is the 'readonly' version of proveMessageReceived.
     /// @param _message The message.
     /// @param _proof The merkle inclusion proof.
-    /// @return true if the message has failed, false otherwise.
-    function proveMessageReceived(
+    /// @return true if the message has been received, false otherwise.
+    function isMessageReceived(
         Message calldata _message,
         bytes calldata _proof
     )
-        public
+        external
+        view
         returns (bool)
     {
         if (_message.destChainId != block.chainid) return false;
-        return _proveSignalReceived(
-            resolve("signal_service", false), hashMessage(_message), _message.srcChainId, _proof
+        return _isSignalReceived(
+            resolve(LibStrings.B_SIGNAL_SERVICE, false),
+            hashMessage(_message),
+            _message.srcChainId,
+            _proof
         );
     }
 
@@ -418,41 +415,16 @@ contract Bridge is EssentialContract, IBridge {
         view
         returns (bool enabled_, address destBridge_)
     {
-        destBridge_ = resolve(_chainId, "bridge", true);
+        destBridge_ = resolve(_chainId, LibStrings.B_BRIDGE, true);
         enabled_ = destBridge_ != address(0);
     }
 
     /// @notice Gets the current context.
     /// @inheritdoc IBridge
-    function context() public view returns (Context memory ctx_) {
+    function context() external view returns (Context memory ctx_) {
         ctx_ = _loadContext();
-        if (ctx_.msgHash == 0 || ctx_.msgHash == bytes32(PLACEHOLDER)) {
+        if (ctx_.msgHash == 0 || ctx_.msgHash == bytes32(_PLACEHOLDER)) {
             revert B_INVALID_CONTEXT();
-        }
-    }
-
-    /// @notice Returns invocation delay values.
-    /// @dev Bridge contract deployed on L1 shall use a non-zero value for better
-    /// security.
-    /// @return invocationDelay_ The minimal delay in second before a message can be executed since
-    /// and the time it was received on the this chain.
-    /// @return invocationExtraDelay_ The extra delay in second (to be added to invocationDelay) if
-    /// the transactor is not the preferredExecutor who proved this message.
-    function getInvocationDelays()
-        public
-        view
-        virtual
-        returns (uint256 invocationDelay_, uint256 invocationExtraDelay_)
-    {
-        if (LibNetwork.isEthereumMainnetOrTestnet(block.chainid)) {
-            // For Taiko mainnet and public testnets
-            // 384 seconds = 6.4 minutes = one ethereum epoch
-            return (1 hours, 384 seconds);
-        } else if (LibNetwork.isTaikoDevnet(block.chainid)) {
-            return (5 minutes, 384 seconds);
-        } else {
-            // This is a Taiko L2 chain where no deleys are applied.
-            return (0, 0);
         }
     }
 
@@ -468,15 +440,33 @@ contract Bridge is EssentialContract, IBridge {
         return _msgHash ^ bytes32(uint256(Status.FAILED));
     }
 
+    /// @notice Returns the minimal gas limit required for sending a given message.
+    /// @param dataLength The length of message.data.
+    /// @return The minimal gas limit required for sending this message.
+    function getMessageMinGasLimit(uint256 dataLength) public pure returns (uint32) {
+        unchecked {
+            // The abi encoding of A = (Message calldata msg) is 10 * 32 bytes
+            // + 32 bytes (A is a dynamic tuple, offset to first elements)
+            // + 32 bytes (offset to last bytes element of Message)
+            // + 32 bytes (padded encoding of length of Message.data + dataLength (padded to 32
+            // bytes)
+            // = 13 * 32 + (dataLength / 32 * 32) + 32.
+            // non-zero calldata cost per byte is 16.
+
+            uint256 dataCost = (dataLength / 32 * 32 + 448) << 4;
+            return SafeCastUpgradeable.toUint32(dataCost + GAS_RESERVE);
+        }
+    }
+
     /// @notice Checks if the given address can pause and/or unpause the bridge.
     /// @dev Considering that the watchdog is a hot wallet, in case its private key is leaked, we
     /// only allow watchdog to pause the bridge, but does not allow it to unpause the bridge.
-    function _authorizePause(address addr, bool toPause) internal view virtual override {
+    function _authorizePause(address addr, bool toPause) internal view override {
         // Owenr and chain_pauser can pause/unpause the bridge.
-        if (addr == owner() || addr == resolve("chain_pauser", true)) return;
+        if (addr == owner() || addr == resolve(LibStrings.B_CHAIN_WATCHDOG, true)) return;
 
         // bridge_watchdog can pause the bridge, but cannot unpause it.
-        if (toPause && addr == resolve("bridge_watchdog", true)) return;
+        if (toPause && addr == resolve(LibStrings.B_BRIDGE_WATCHDOG, true)) return;
 
         revert RESOLVER_DENIED();
     }
@@ -484,9 +474,7 @@ contract Bridge is EssentialContract, IBridge {
     /// @notice Invokes a call message on the Bridge.
     /// @param _message The call message to be invoked.
     /// @param _msgHash The hash of the message.
-    /// @param _gasLimit The gas limit for the message call.
-    /// @return success_ A boolean value indicating whether the message call was
-    /// successful.
+    /// @return success_ A boolean value indicating whether the message call was successful.
     /// @dev This function updates the context in the state before and after the
     /// message call.
     function _invokeMessageCall(
@@ -497,22 +485,12 @@ contract Bridge is EssentialContract, IBridge {
         private
         returns (bool success_)
     {
-        if (_gasLimit == 0) revert B_INVALID_GAS_LIMIT();
         assert(_message.from != address(this));
 
+        if (_gasLimit == 0) return false;
+
         _storeContext(_msgHash, _message.from, _message.srcChainId);
-
-        if (
-            _message.data.length >= 4 // msg can be empty
-                && bytes4(_message.data) != IMessageInvocable.onMessageInvocation.selector
-                && _message.to.isContract()
-        ) {
-            success_ = false;
-        } else {
-            success_ = _message.to.sendEther(_message.value, _gasLimit, _message.data);
-        }
-
-        // Must reset the context after the message call
+        success_ = _message.to.sendEther(_message.value, _gasLimit, _message.data);
         _resetContext();
     }
 
@@ -522,16 +500,9 @@ contract Bridge is EssentialContract, IBridge {
     /// @param _msgHash The hash of the message.
     /// @param _status The new status of the message.
     function _updateMessageStatus(bytes32 _msgHash, Status _status) private {
-        if (messageStatus[_msgHash] == _status) return;
-
+        if (messageStatus[_msgHash] == _status) revert B_INVALID_STATUS();
         messageStatus[_msgHash] = _status;
         emit MessageStatusChanged(_msgHash, _status);
-
-        if (_status == Status.FAILED) {
-            ISignalService(resolve("signal_service", false)).sendSignal(
-                signalForFailedMessage(_msgHash)
-            );
-        }
     }
 
     /// @notice Resets the call context
@@ -539,7 +510,9 @@ contract Bridge is EssentialContract, IBridge {
         if (LibNetwork.isDencunSupported(block.chainid)) {
             _storeContext(bytes32(0), address(0), uint64(0));
         } else {
-            _storeContext(bytes32(PLACEHOLDER), address(uint160(PLACEHOLDER)), uint64(PLACEHOLDER));
+            _storeContext(
+                bytes32(_PLACEHOLDER), address(uint160(_PLACEHOLDER)), uint64(_PLACEHOLDER)
+            );
         }
     }
 
@@ -577,12 +550,12 @@ contract Bridge is EssentialContract, IBridge {
         }
     }
 
-    /// @notice Checks if the signal was received.
+    /// @notice Checks if the signal was received and caches cross-chain data if requested.
     /// @param _signalService The signal service address.
     /// @param _signal The signal.
     /// @param _chainId The ID of the chain the signal is stored on.
     /// @param _proof The merkle inclusion proof.
-    /// @return true if the message was received.
+    /// @return numCacheOps_ Num of cached items
     function _proveSignalReceived(
         address _signalService,
         bytes32 _signal,
@@ -590,14 +563,90 @@ contract Bridge is EssentialContract, IBridge {
         bytes calldata _proof
     )
         private
-        returns (bool)
+        returns (uint32 numCacheOps_)
     {
         try ISignalService(_signalService).proveSignalReceived(
-            _chainId, resolve(_chainId, "bridge", false), _signal, _proof
+            _chainId, resolve(_chainId, LibStrings.B_BRIDGE, false), _signal, _proof
+        ) returns (uint256 numCacheOps) {
+            numCacheOps_ = uint32(numCacheOps);
+        } catch {
+            revert B_SIGNAL_NOT_RECEIVED();
+        }
+    }
+
+    /// @notice Checks if the signal was received.
+    /// This is the 'readonly' version of _proveSignalReceived.
+    /// @param _signalService The signal service address.
+    /// @param _signal The signal.
+    /// @param _chainId The ID of the chain the signal is stored on.
+    /// @param _proof The merkle inclusion proof.
+    /// @return true if the message was received.
+    function _isSignalReceived(
+        address _signalService,
+        bytes32 _signal,
+        uint64 _chainId,
+        bytes calldata _proof
+    )
+        private
+        view
+        returns (bool)
+    {
+        try ISignalService(_signalService).verifySignalReceived(
+            _chainId, resolve(_chainId, LibStrings.B_BRIDGE, false), _signal, _proof
         ) {
             return true;
         } catch {
             return false;
         }
+    }
+
+    function _invocationGasLimit(
+        Message calldata _message,
+        bool _checkThe63Over64Rule
+    )
+        private
+        view
+        returns (uint256 gasLimit_)
+    {
+        unchecked {
+            uint256 minGasRequired = getMessageMinGasLimit(_message.data.length);
+            gasLimit_ = minGasRequired.max(_message.gasLimit) - minGasRequired;
+        }
+
+        if (_checkThe63Over64Rule && (gasleft() * 63) >> 6 < gasLimit_) {
+            revert B_INSUFFICIENT_GAS();
+        }
+    }
+
+    function _checkStatus(bytes32 _msgHash, Status _expectedStatus) private view {
+        if (messageStatus[_msgHash] != _expectedStatus) revert B_INVALID_STATUS();
+    }
+
+    function _consumeEtherQuota(uint256 _amount) private returns (bool) {
+        address quotaManager = resolve(LibStrings.B_QUOTA_MANAGER, true);
+        if (quotaManager == address(0)) return true;
+
+        try IQuotaManager(quotaManager).consumeQuota(address(0), _amount) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _unableToInvokeMessageCall(
+        Message calldata _message,
+        address _signalService
+    )
+        internal
+        view
+        returns (bool)
+    {
+        if (_message.to == address(0)) return true;
+        if (_message.to == address(this)) return true;
+        if (_message.to == _signalService) return true;
+
+        return _message.data.length >= 4
+            && bytes4(_message.data) != IMessageInvocable.onMessageInvocation.selector
+            && _message.to.isContract();
     }
 }

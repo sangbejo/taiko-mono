@@ -25,9 +25,8 @@
   import { OnNetwork } from '$components/OnNetwork';
   import { TokenDropdown } from '$components/TokenDropdown';
   import { getMaxAmountToBridge } from '$libs/bridge';
-  import { UnknownTokenTypeError } from '$libs/error';
-  import { fetchBalance, tokens, TokenType } from '$libs/token';
-  import { ETHToken } from '$libs/token';
+  import { fetchBalance, tokens } from '$libs/token';
+  import { isToken } from '$libs/token/isToken';
   import { refreshUserBalance, renderBalance } from '$libs/util/balance';
   import { debounce } from '$libs/util/debounce';
   import { getLogger } from '$libs/util/logger';
@@ -71,30 +70,6 @@
       return;
     }
 
-    if (!$tokenBalance) {
-      $tokenBalance = await fetchBalance({ userAddress: user, token, srcChainId: $connectedSourceChain?.id });
-      if (!$tokenBalance?.value) {
-        $insufficientBalance = true;
-        $validatingAmount = false;
-      }
-    }
-
-    switch (token.type) {
-      case TokenType.ERC20:
-      case TokenType.ERC1155:
-        if ($tokenBalance?.value && ($ethBalance <= 0n || $enteredAmount > $tokenBalance?.value)) {
-          $insufficientBalance = true;
-        }
-        break;
-      case TokenType.ETH:
-      case TokenType.ERC721:
-        if ($enteredAmount >= $ethBalance) {
-          $insufficientBalance = true;
-        }
-        break;
-      default:
-        throw new UnknownTokenTypeError();
-    }
     $validatingAmount = false;
     $computingBalance = false;
   }
@@ -102,36 +77,23 @@
   const debouncedValidateAmount = debounce(validateAmount, 300);
 
   const handleAmountInputChange = (value: string) => {
-    if (!$selectedToken) return;
+    if (!isToken($selectedToken)) return;
     $validatingAmount = true;
     $errorComputingBalance = false;
 
-    if ($selectedToken.type === TokenType.ERC1155) {
-      // For ERC1155, no decimals are allowed
-      if (/[.,]/.test(value)) {
-        $errorComputingBalance = true;
-        return;
-      }
-    }
-    if (
-      $selectedToken.type !== TokenType.ERC1155 &&
-      $selectedToken.type !== TokenType.ERC721 &&
-      !$selectedToken.decimals
-    ) {
-      $enteredAmount = BigInt(value);
-    } else {
-      $enteredAmount = parseUnits(value, $selectedToken.decimals);
-    }
+    $enteredAmount = parseUnits(value, $selectedToken.decimals);
     debouncedValidateAmount();
   };
 
   const useMaxAmount = async () => {
     log('useMaxAmount');
-    if (!$selectedToken || !$connectedSourceChain || !$destNetwork || !$tokenBalance || !$account?.address) return;
+
+    if (!isToken($selectedToken) || !$connectedSourceChain || !$destNetwork || !$tokenBalance || !$account?.address)
+      return;
+
     try {
       let maxAmount;
       if ($tokenBalance) {
-        // $enteredAmount = $tokenBalance.value;
         maxAmount = await getMaxAmountToBridge({
           to: $account.address,
           token: $selectedToken,
@@ -144,7 +106,6 @@
         // Update state
         $enteredAmount = maxAmount;
         value = formatUnits(maxAmount, $selectedToken.decimals);
-
         value = truncateDecimal(parseFloat(value), 12).toString();
         validateAmount();
       }
@@ -154,20 +115,18 @@
   };
 
   const reset = async () => {
-    $selectedToken = ETHToken;
+    log('reset');
     $computingBalance = true;
     value = '';
     $enteredAmount = 0n;
-    if ($account && $account.address && $account?.isConnected) {
+    if ($account && $account.address && $account?.isConnected && $selectedToken) {
       validateAmount($selectedToken);
       refreshUserBalance();
-      if ($selectedToken && $selectedToken.type !== TokenType.ETH)
-        $tokenBalance = await fetchBalance({
-          userAddress: $account.address,
-          token: $selectedToken,
-          srcChainId: $connectedSourceChain?.id,
-        });
-
+      $tokenBalance = await fetchBalance({
+        userAddress: $account.address,
+        token: $selectedToken,
+        srcChainId: $connectedSourceChain?.id,
+      });
       previousSelectedToken = $selectedToken;
     } else {
       balance = '0.00';
@@ -275,7 +234,7 @@
     </div>
 
     <!-- Token Dropdown -->
-    <TokenDropdown combined class="min-w-[151px] z-20 " {tokens} bind:value={$selectedToken} bind:disabled />
+    <TokenDropdown combined class="min-w-[151px] z-20" {tokens} bind:value={$selectedToken} bind:disabled />
   </div>
 
   <div class="flex mt-[8px] min-h-[24px]">
@@ -286,9 +245,9 @@
           >{$t('recipient.label')} <ProcessingFee textOnly class="text-tertiary-content" bind:hasEnoughEth /></span>
       </div>
     {:else if showInsufficientBalanceAlert}
-      <FlatAlert type="error" message={$t('bridge.errors.insufficient_balance.title')} class="relative " />
+      <FlatAlert type="error" message={$t('bridge.errors.insufficient_balance.title')} class="relative" />
     {:else if showInvalidTokenAlert}
-      <FlatAlert type="error" message={$t('bridge.errors.custom_token.not_found.message')} class="relative " />
+      <FlatAlert type="error" message={$t('bridge.errors.custom_token.not_found.message')} class="relative" />
     {:else}
       <LoadingText mask="" class="w-1/2" />
     {/if}

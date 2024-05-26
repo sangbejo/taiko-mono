@@ -12,34 +12,8 @@ import { config } from '$libs/wagmi';
 import { BLOCK_NUMBER_1, L1_ADDRESSES, L1_CHAIN_ID, L2_CHAIN_ID, STORAGE_KEY_1 } from '$mocks';
 
 vi.mock('@wagmi/core');
-vi.mock('../../generated/customTokenConfig', () => {
-  const mockERC20 = {
-    name: 'MockERC20',
-    addresses: { '1': zeroAddress },
-    symbol: 'MTF',
-    decimals: 18,
-    type: 'ERC20',
-  };
-  const mockERC1155 = {
-    name: 'MockERC1155',
-    addresses: { '1': zeroAddress },
-    symbol: 'MNFT',
-    balance: 1337n,
-    tokenId: 123,
-    uri: 'some/uri/123',
-    type: 'ERC1155',
-  };
-  const mockERC721 = {
-    name: 'MockERC721',
-    addresses: { '1': zeroAddress },
-    symbol: 'MNFT',
-    decimals: 18,
-    type: 'ERC721',
-  };
-  return {
-    customToken: [mockERC20, mockERC1155, mockERC721],
-  };
-});
+vi.mock('$customToken');
+
 describe('BridgeProver', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -137,10 +111,8 @@ describe('BridgeProver', () => {
         destOwner: '0x8626f6940e2eb28930efb4cef49b2d1f2c9c1199',
         fee: 0n,
         from: '0x8626f6940e2eb28930efb4cef49b2d1f2c9c1199',
-        gasLimit: 0n,
+        gasLimit: 0,
         id: 4829n,
-        memo: '',
-        refundTo: '0x8626f6940e2eb28930efb4cef49b2d1f2c9c1199',
         srcChainId: 32382n,
         srcOwner: '0x8626f6940e2eb28930efb4cef49b2d1f2c9c1199',
         to: '0x8626f6940e2eb28930efb4cef49b2d1f2c9c1199',

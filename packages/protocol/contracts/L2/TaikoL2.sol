@@ -5,9 +5,9 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "../common/EssentialContract.sol";
+import "../common/LibStrings.sol";
 import "../libs/LibAddress.sol";
 import "../signal/ISignalService.sol";
-import "../signal/LibSignals.sol";
 import "./Lib1559Math.sol";
 import "./LibL2Config.sol";
 
@@ -40,11 +40,8 @@ contract TaikoL2 is EssentialContract {
     /// @notice The last synced L1 block height.
     uint64 public lastSyncedBlock;
 
-    /// @notice The parent block's timestamp.
-    uint64 public parentTimestamp;
-
-    /// @notice The current block's timestamp.
-    uint64 private __currentBlockTimestamp;
+    uint64 private __deprecated1; // was parentTimestamp
+    uint64 private __deprecated2; // was __currentBlockTimestamp
 
     /// @notice The L1's chain ID.
     uint64 public l1ChainId;
@@ -100,7 +97,6 @@ contract TaikoL2 is EssentialContract {
         l1ChainId = _l1ChainId;
         gasExcess = _gasExcess;
         (publicInputHash,) = _calcPublicInputHash(block.number);
-        __currentBlockTimestamp = uint64(block.timestamp);
     }
 
     /// @notice Anchors the latest L1 block details to L2 for cross-layer
@@ -143,31 +139,29 @@ contract TaikoL2 is EssentialContract {
         }
 
         // Verify the base fee per gas is correct
-        uint256 basefee;
-        (basefee, gasExcess) = getBasefee(_l1BlockId, _parentGasUsed);
+        (uint256 _basefee, uint64 _gasExcess) = getBasefee(_l1BlockId, _parentGasUsed);
 
-        if (!skipFeeCheck() && block.basefee != basefee) {
+        if (!skipFeeCheck() && block.basefee != _basefee) {
             revert L2_BASEFEE_MISMATCH();
         }
 
         if (_l1BlockId > lastSyncedBlock) {
             // Store the L1's state root as a signal to the local signal service to
             // allow for multi-hop bridging.
-            ISignalService(resolve("signal_service", false)).syncChainData(
-                l1ChainId, LibSignals.STATE_ROOT, _l1BlockId, _l1StateRoot
+            ISignalService(resolve(LibStrings.B_SIGNAL_SERVICE, false)).syncChainData(
+                l1ChainId, LibStrings.H_STATE_ROOT, _l1BlockId, _l1StateRoot
             );
 
             lastSyncedBlock = _l1BlockId;
         }
 
         // Update state variables
-        l2Hashes[parentId] = blockhash(parentId);
+        bytes32 _parentHash = blockhash(parentId);
+        l2Hashes[parentId] = _parentHash;
         publicInputHash = publicInputHashNew;
+        gasExcess = _gasExcess;
 
-        parentTimestamp = __currentBlockTimestamp;
-        __currentBlockTimestamp = uint64(block.timestamp);
-
-        emit Anchored(blockhash(parentId), gasExcess);
+        emit Anchored(_parentHash, _gasExcess);
     }
 
     /// @notice Withdraw token or Ether from this address
@@ -178,9 +172,9 @@ contract TaikoL2 is EssentialContract {
         address _to
     )
         external
-        onlyFromOwnerOrNamed("withdrawer")
-        nonReentrant
         whenNotPaused
+        onlyFromOwnerOrNamed(LibStrings.B_WITHDRAWER)
+        nonReentrant
     {
         if (_to == address(0)) revert L2_INVALID_PARAM();
         if (_token == address(0)) {
@@ -210,7 +204,6 @@ contract TaikoL2 is EssentialContract {
         (basefee_, gasExcess_) = Lib1559Math.calc1559BaseFee(
             config.gasTargetPerL1Block,
             config.basefeeAdjustmentQuotient,
-            config.gasExcessMinValue,
             gasExcess,
             gasIssuance,
             _parentGasUsed

@@ -11,6 +11,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cyberhorsey/errors"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -22,6 +23,7 @@ import (
 	"github.com/taikoxyz/taiko-mono/packages/relayer/bindings/taikol1"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/queue"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/repo"
+	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/utils"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
@@ -68,6 +70,8 @@ type ethClient interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	BlockNumber(ctx context.Context) (uint64, error)
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
+	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
+	TransactionByHash(ctx context.Context, txHash common.Hash) (*types.Transaction, bool, error)
 }
 
 // DB is a local interface that lets us narrow down a database type for testing.
@@ -174,7 +178,10 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) (err error) {
 
 	// taikoL1 will only be set when initializing a L1 - L2 indexer
 	var taikoL1 *taikol1.TaikoL1
+
 	if cfg.SrcTaikoAddress != ZeroAddress {
+		slog.Info("setting srcTaikoAddress", "addr", cfg.SrcTaikoAddress.Hex())
+
 		taikoL1, err = taikol1.NewTaikoL1(cfg.SrcTaikoAddress, srcEthClient)
 		if err != nil {
 			return errors.Wrap(err, "taikol1.NewTaikoL1")
@@ -182,7 +189,10 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) (err error) {
 	}
 
 	var signalService relayer.SignalService
+
 	if cfg.SrcSignalServiceAddress != ZeroAddress {
+		slog.Info("setting srcSignalServiceAddress", "addr", cfg.SrcSignalServiceAddress.Hex())
+
 		signalService, err = signalservice.NewSignalService(cfg.SrcSignalServiceAddress, srcEthClient)
 		if err != nil {
 			return errors.Wrap(err, "signalservice.NewSignalService")
@@ -258,15 +268,13 @@ func (i *Indexer) Start() error {
 		return err
 	}
 
-	syncMode := i.syncMode
-
 	// always use Resync when crawling past blocks
 	if i.watchMode == CrawlPastBlocks {
-		syncMode = Resync
+		i.syncMode = Resync
 	}
 
 	// set the initial processing block, which will vary by sync mode.
-	if err := i.setInitialIndexingBlockByMode(i.ctx, syncMode, i.srcChainId); err != nil {
+	if err := i.setInitialIndexingBlockByMode(i.ctx, i.syncMode, i.srcChainId); err != nil {
 		return errors.Wrap(err, "i.setInitialIndexingBlockByMode")
 	}
 
@@ -274,13 +282,27 @@ func (i *Indexer) Start() error {
 
 	go i.eventLoop(i.ctx, i.latestIndexedBlockNumber)
 
+	go func() {
+		if err := backoff.Retry(func() error {
+			return utils.ScanBlocks(i.ctx, i.srcEthClient, i.wg)
+		}, backoff.NewConstantBackOff(5*time.Second)); err != nil {
+			slog.Error("scan blocks backoff retry", "error", err)
+		}
+	}()
+
 	return nil
 }
 
 func (i *Indexer) eventLoop(ctx context.Context, startBlockID uint64) {
 	defer i.wg.Done()
 
-	t := time.NewTicker(10 * time.Second)
+	var d time.Duration = 10 * time.Second
+
+	if i.watchMode == CrawlPastBlocks {
+		d = 10 * time.Minute
+	}
+
+	t := time.NewTicker(d)
 
 	defer t.Stop()
 
@@ -318,11 +340,18 @@ func (i *Indexer) filter(ctx context.Context) error {
 			i.latestIndexedBlockNumber = *i.targetBlockNumber
 
 			endBlockID = i.latestIndexedBlockNumber + 1
-		} else if endBlockID > i.numLatestBlocksToIgnoreWhenCrawling {
-			// otherwise, we need to set the endBlockID as the greater of the two:
-			// either the endBlockID minus the number of latest blocks to ignore,
-			// or endBlockID.
-			endBlockID -= i.numLatestBlocksToIgnoreWhenCrawling
+		} else {
+			// set the initial processing block back to either 0 or the genesis block again.
+			if err := i.setInitialIndexingBlockByMode(i.ctx, i.syncMode, i.srcChainId); err != nil {
+				return errors.Wrap(err, "i.setInitialIndexingBlockByMode")
+			}
+
+			if endBlockID > i.numLatestBlocksToIgnoreWhenCrawling {
+				// otherwise, we need to set the endBlockID as the greater of the two:
+				// either the endBlockID minus the number of latest blocks to ignore,
+				// or endBlockID.
+				endBlockID -= i.numLatestBlocksToIgnoreWhenCrawling
+			}
 		}
 	}
 
@@ -372,9 +401,9 @@ func (i *Indexer) filter(ctx context.Context) error {
 					return errors.Wrap(err, "i.indexChainDataSyncedEvents")
 				}
 			}
-		case relayer.EventNameMessageReceived:
-			if err := i.withRetry(func() error { return i.indexMessageReceivedEvents(ctx, filterOpts) }); err != nil {
-				return errors.Wrap(err, "i.indexMessageReceivedEvents")
+		case relayer.EventNameMessageProcessed:
+			if err := i.withRetry(func() error { return i.indexMessageProcessedEvents(ctx, filterOpts) }); err != nil {
+				return errors.Wrap(err, "i.indexMessageProcessedEvents")
 			}
 		}
 
@@ -447,15 +476,15 @@ func (i *Indexer) checkReorg(ctx context.Context, emittedInBlockNumber uint64) e
 	return nil
 }
 
-// indexMessageReceivedEvents indexes `MessageReceived` events on the bridge contract
+// indexMessageProcessedEvents indexes `MessageProcessed` events on the bridge contract
 // and stores them to the database, and adds the message to the queue if it has not been
 // seen before.
-func (i *Indexer) indexMessageReceivedEvents(ctx context.Context,
+func (i *Indexer) indexMessageProcessedEvents(ctx context.Context,
 	filterOpts *bind.FilterOpts,
 ) error {
-	events, err := i.bridge.FilterMessageReceived(filterOpts, nil)
+	events, err := i.bridge.FilterMessageProcessed(filterOpts, nil)
 	if err != nil {
-		return errors.Wrap(err, "bridge.FilterMessageReceived")
+		return errors.Wrap(err, "bridge.FilterMessageProcessed")
 	}
 
 	group, _ := errgroup.WithContext(ctx)
@@ -475,9 +504,9 @@ func (i *Indexer) indexMessageReceivedEvents(ctx context.Context,
 		}
 
 		group.Go(func() error {
-			err := i.handleMessageReceivedEvent(ctx, i.srcChainId, event, true)
+			err := i.handleMessageProcessedEvent(ctx, i.srcChainId, event, true)
 			if err != nil {
-				relayer.MessageReceivedEventsIndexingErrors.Inc()
+				relayer.MessageProcessedEventsIndexingErrors.Inc()
 				// log error but always return nil to keep other goroutines active
 				slog.Error("error handling event", "err", err.Error())
 

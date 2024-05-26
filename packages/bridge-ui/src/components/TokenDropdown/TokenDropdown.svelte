@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { deepEqual } from '@wagmi/core';
+  import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import { t } from 'svelte-i18n';
   import type { Address } from 'viem';
   import { zeroAddress } from 'viem';
@@ -18,7 +19,7 @@
   import { warningToast } from '$components/NotificationToast';
   import { OnAccount } from '$components/OnAccount';
   import { tokenService } from '$libs/storage/services';
-  import { ETHToken, fetchBalance as getTokenBalance, type Token, TokenType } from '$libs/token';
+  import { ETHToken, fetchBalance as getTokenBalance, type NFT, type Token, TokenType } from '$libs/token';
   import { getTokenAddresses } from '$libs/token/getTokenAddresses';
   import { getLogger } from '$libs/util/logger';
   import { truncateString } from '$libs/util/truncateString';
@@ -26,22 +27,31 @@
   import { type Account, account } from '$stores/account';
   import { connectedSourceChain } from '$stores/network';
 
+  import AddCustomErc20 from './AddCustomERC20.svelte';
   import DialogView from './DialogView.svelte';
   import DropdownView from './DropdownView.svelte';
   import { symbolToIconMap } from './symbolToIconMap';
+  import { TabTypes } from './types';
 
   const log = getLogger('TokenDropdown');
 
+  const dispatch = createEventDispatcher();
+
   export let tokens: Token[] = [];
-  export let value: Maybe<Token> = null;
+  export let value: Maybe<Token | NFT> = null;
   export let onlyMintable: boolean = false;
   export let disabled = false;
   export let combined = false;
 
+  let customTokenModalOpen = false;
+
   let id = `menu-${uid()}`;
   $: menuOpen = false;
 
-  const customTokens = tokenService.getTokens($account?.address as Address);
+  let activeTab: TabTypes = TabTypes.TOKEN;
+
+  let customTokens = tokenService.getTokens($account?.address as Address);
+
   // This will control which view to render depending on the screensize.
   // Since markup will differ, and there is logic running when interacting
   // with this component, it makes more sense to not render the view that's
@@ -52,12 +62,12 @@
     menuOpen = false;
   };
 
-  const openMenu = (event: Event) => {
-    event.stopPropagation();
+  const openMenu = () => {
     menuOpen = true;
   };
 
   const selectToken = async (token: Token) => {
+    dispatch('tokenSelected', { token });
     const srcChain = $connectedSourceChain;
     const destChain = $destNetwork;
     $computingBalance = true;
@@ -116,11 +126,21 @@
     $computingBalance = false;
   };
 
+  const handleCustomTokenModal = () => {
+    closeMenu();
+    customTokenModalOpen = true;
+  };
+
   const handleTokenRemoved = (event: { detail: { token: Token } }) => {
+    const token = event.detail.token;
+
     // if the selected token is the one that was removed by the user, remove it
-    if (event.detail.token === value) {
+    if (deepEqual(token, value)) {
       value = ETHToken;
     }
+    const address = $account.address;
+    tokenService.removeToken(token, address as Address);
+    customTokens = tokenService.getTokens(address as Address);
   };
 
   async function updateBalance() {
@@ -165,14 +185,10 @@
   }
 
   const onAccountChange = (newAccount: Account, prevAccount?: Account) => {
-    if (newAccount?.chainId === prevAccount?.chainId || !newAccount || !prevAccount) updateBalance();
+    if (newAccount?.chainId === prevAccount?.chainId || !newAccount || !prevAccount) reset();
   };
 
-  $: textClass = disabled ? 'text-secondary-content' : 'font-bold ';
-
-  onDestroy(() => closeMenu());
-
-  onMount(async () => {
+  const reset = async () => {
     const srcChain = $connectedSourceChain;
     const destChain = $destNetwork;
     const user = $account?.address;
@@ -182,8 +198,15 @@
     $computingBalance = true;
     value = tokens[0];
     $selectedToken = value;
-    await updateBalance();
     $computingBalance = false;
+  };
+
+  $: textClass = disabled ? 'text-secondary-content' : 'font-bold ';
+
+  onDestroy(() => closeMenu());
+
+  onMount(async () => {
+    reset();
   });
 </script>
 
@@ -198,7 +221,7 @@
     aria-expanded={menuOpen}
     class="f-between-center w-full h-full px-[20px] py-[14px] input-box bg-neutral-background border-0 shadow-none outline-none
     {combined ? '!rounded-l-[0px] !rounded-r-[10px]' : '!rounded-[10px]'}"
-    on:click={openMenu}>
+    on:click|stopPropagation={openMenu}>
     <div class="space-x-2">
       {#if !value || disabled}
         <span class="title-subsection-bold text-base text-secondary-content">{$t('token_dropdown.label')}</span>
@@ -229,16 +252,31 @@
       bind:menuOpen
       {onlyMintable}
       {tokens}
-      {customTokens}
+      bind:customTokens
       {value}
       {selectToken}
       {closeMenu}
-      on:tokenRemoved={handleTokenRemoved} />
+      {activeTab}
+      on:tokenRemoved={handleTokenRemoved}
+      on:openCustomTokenModal={handleCustomTokenModal} />
   {:else}
-    <DialogView {id} bind:menuOpen {onlyMintable} {tokens} {customTokens} {value} {selectToken} {closeMenu} />
+    <DialogView
+      {id}
+      bind:menuOpen
+      {onlyMintable}
+      {tokens}
+      bind:customTokens
+      {value}
+      {selectToken}
+      {closeMenu}
+      {activeTab}
+      on:tokenRemoved={handleTokenRemoved}
+      on:openCustomTokenModal={handleCustomTokenModal} />
   {/if}
 </div>
 
 <div data-modal-uuid={id} />
 
 <OnAccount change={onAccountChange} />
+
+<AddCustomErc20 bind:modalOpen={customTokenModalOpen} bind:customTokens on:tokenRemoved />

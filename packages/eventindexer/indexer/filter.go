@@ -36,7 +36,7 @@ func filterFunc(
 
 			err = i.saveTransitionProvedEvents(ctx, chainID, transitionProvedEvents)
 			if err != nil {
-				return errors.Wrap(err, "i.saveBlockProvenEvents")
+				return errors.Wrap(err, "i.saveTransitionProvedEvents")
 			}
 
 			return nil
@@ -71,7 +71,7 @@ func filterFunc(
 		})
 
 		wg.Go(func() error {
-			blockVerifiedEvents, err := i.taikol1.FilterBlockVerified(filterOpts, nil, nil, nil)
+			blockVerifiedEvents, err := i.taikol1.FilterBlockVerified(filterOpts, nil, nil)
 			if err != nil {
 				return errors.Wrap(err, "i.taikol1.FilterBlockVerified")
 			}
@@ -117,45 +117,6 @@ func filterFunc(
 		})
 	}
 
-	if i.swaps != nil {
-		for _, s := range i.swaps {
-			swap := s
-
-			wg.Go(func() error {
-				swaps, err := swap.FilterSwap(filterOpts, nil, nil)
-				if err != nil {
-					return errors.Wrap(err, "i.bridge.FilterSwap")
-				}
-
-				// only save ones above 0.01 ETH, this is only for Galaxe
-				// and we dont care about the rest
-				err = i.saveSwapEvents(ctx, chainID, swaps)
-				if err != nil {
-					return errors.Wrap(err, "i.saveSwapEvents")
-				}
-
-				return nil
-			})
-
-			wg.Go(func() error {
-				liquidityAdded, err := swap.FilterMint(filterOpts, nil)
-
-				if err != nil {
-					return errors.Wrap(err, "i.bridge.FilterMint")
-				}
-
-				// only save ones above 0.1 ETH, this is only for Galaxe
-				// and we dont care about the rest
-				err = i.saveLiquidityAddedEvents(ctx, chainID, liquidityAdded)
-				if err != nil {
-					return errors.Wrap(err, "i.saveLiquidityAddedEvents")
-				}
-
-				return nil
-			})
-		}
-	}
-
 	wg.Go(func() error {
 		if err := i.indexRawBlockData(ctx, chainID, filterOpts.Start, *filterOpts.End); err != nil {
 			return errors.Wrap(err, "i.indexRawBlockData")
@@ -182,24 +143,14 @@ func (i *Indexer) filter(
 	ctx context.Context,
 	filter FilterFunc,
 ) error {
-	n, err := i.eventRepo.FindLatestBlockID(i.srcChainID)
+	endBlockID, err := i.ethClient.BlockNumber(ctx)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "i.ethClient.BlockNumber")
 	}
-
-	i.latestIndexedBlockNumber = n
-
-	header, err := i.ethClient.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return errors.Wrap(err, "i.ethClient.HeaderByNumber")
-	}
-
-	// the end block is the latest header.
-	endBlockID := header.Number.Uint64()
 
 	slog.Info("getting batch of events",
 		"startBlock", i.latestIndexedBlockNumber,
-		"endBlock", header.Number.Int64(),
+		"endBlock", endBlockID,
 		"batchSize", i.blockBatchSize,
 	)
 

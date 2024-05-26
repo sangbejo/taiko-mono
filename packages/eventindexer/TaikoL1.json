@@ -25,38 +25,6 @@
   },
   {
     "type": "function",
-    "name": "canDepositEthToL2",
-    "inputs": [
-      {
-        "name": "_amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "depositEtherToL2",
-    "inputs": [
-      {
-        "name": "_recipient",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "payable"
-  },
-  {
-    "type": "function",
     "name": "getBlock",
     "inputs": [
       {
@@ -112,9 +80,155 @@
             "internalType": "uint32"
           }
         ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getConfig",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct TaikoData.Config",
+        "components": [
+          {
+            "name": "chainId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "blockMaxProposals",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "blockRingBufferSize",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxBlocksToVerifyPerProposal",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "blockMaxGasLimit",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "livenessBond",
+            "type": "uint96",
+            "internalType": "uint96"
+          },
+          {
+            "name": "blockSyncThreshold",
+            "type": "uint8",
+            "internalType": "uint8"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getStateVariables",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct TaikoData.SlotA",
+        "components": [
+          {
+            "name": "genesisHeight",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "genesisTimestamp",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastSyncedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastSynecdAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
       },
       {
-        "name": "ts_",
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct TaikoData.SlotB",
+        "components": [
+          {
+            "name": "numBlocks",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastVerifiedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "provingPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "__reservedB1",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "__reservedB2",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "__reservedB3",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "lastUnpausedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getTransition",
+    "inputs": [
+      {
+        "name": "_blockId",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "_tid",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
         "type": "tuple",
         "internalType": "struct TaikoData.TransitionState",
         "components": [
@@ -164,171 +278,9 @@
             "internalType": "uint16"
           },
           {
-            "name": "contestations",
-            "type": "uint8",
-            "internalType": "uint8"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getConfig",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "tuple",
-        "internalType": "struct TaikoData.Config",
-        "components": [
-          {
-            "name": "chainId",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "blockMaxProposals",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "blockRingBufferSize",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "maxBlocksToVerifyPerProposal",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "blockMaxGasLimit",
-            "type": "uint32",
-            "internalType": "uint32"
-          },
-          {
-            "name": "livenessBond",
-            "type": "uint96",
-            "internalType": "uint96"
-          },
-          {
-            "name": "ethDepositRingBufferSize",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "ethDepositMinCountPerBlock",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "ethDepositMaxCountPerBlock",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "ethDepositMinAmount",
-            "type": "uint96",
-            "internalType": "uint96"
-          },
-          {
-            "name": "ethDepositMaxAmount",
-            "type": "uint96",
-            "internalType": "uint96"
-          },
-          {
-            "name": "ethDepositGas",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "ethDepositMaxFee",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "blockSyncThreshold",
-            "type": "uint8",
-            "internalType": "uint8"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getStateVariables",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "a_",
-        "type": "tuple",
-        "internalType": "struct TaikoData.SlotA",
-        "components": [
-          {
-            "name": "genesisHeight",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "genesisTimestamp",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "numEthDeposits",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "nextEthDepositToProcess",
-            "type": "uint64",
-            "internalType": "uint64"
-          }
-        ]
-      },
-      {
-        "name": "b_",
-        "type": "tuple",
-        "internalType": "struct TaikoData.SlotB",
-        "components": [
-          {
-            "name": "numBlocks",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "lastVerifiedBlockId",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
-            "name": "provingPaused",
-            "type": "bool",
-            "internalType": "bool"
-          },
-          {
             "name": "__reserved1",
             "type": "uint8",
             "internalType": "uint8"
-          },
-          {
-            "name": "__reserved2",
-            "type": "uint16",
-            "internalType": "uint16"
-          },
-          {
-            "name": "__reserved3",
-            "type": "uint32",
-            "internalType": "uint32"
-          },
-          {
-            "name": "lastUnpausedAt",
-            "type": "uint64",
-            "internalType": "uint64"
           }
         ]
       }
@@ -402,11 +354,37 @@
             "internalType": "uint16"
           },
           {
-            "name": "contestations",
+            "name": "__reserved1",
             "type": "uint8",
             "internalType": "uint8"
           }
         ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "impl",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "inNonReentrant",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -429,10 +407,35 @@
         "name": "_genesisBlockHash",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "_toPause",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "init2",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "lastUnpausedAt",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -651,6 +654,19 @@
   },
   {
     "type": "function",
+    "name": "resetGenesisHash",
+    "inputs": [
+      {
+        "name": "_genesisBlockHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "resolve",
     "inputs": [
       {
@@ -704,9 +720,99 @@
   },
   {
     "type": "function",
+    "name": "slotA",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct TaikoData.SlotA",
+        "components": [
+          {
+            "name": "genesisHeight",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "genesisTimestamp",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastSyncedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastSynecdAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "slotB",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct TaikoData.SlotB",
+        "components": [
+          {
+            "name": "numBlocks",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastVerifiedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "provingPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "__reservedB1",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "__reservedB2",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "__reservedB3",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "lastUnpausedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "state",
     "inputs": [],
     "outputs": [
+      {
+        "name": "__reserve1",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
       {
         "name": "slotA",
         "type": "tuple",
@@ -723,12 +829,12 @@
             "internalType": "uint64"
           },
           {
-            "name": "numEthDeposits",
+            "name": "lastSyncedBlockId",
             "type": "uint64",
             "internalType": "uint64"
           },
           {
-            "name": "nextEthDepositToProcess",
+            "name": "lastSynecdAt",
             "type": "uint64",
             "internalType": "uint64"
           }
@@ -755,17 +861,17 @@
             "internalType": "bool"
           },
           {
-            "name": "__reserved1",
+            "name": "__reservedB1",
             "type": "uint8",
             "internalType": "uint8"
           },
           {
-            "name": "__reserved2",
+            "name": "__reservedB2",
             "type": "uint16",
             "internalType": "uint16"
           },
           {
-            "name": "__reserved3",
+            "name": "__reservedB3",
             "type": "uint32",
             "internalType": "uint32"
           },
@@ -1138,12 +1244,6 @@
         "internalType": "uint256"
       },
       {
-        "name": "assignedProver",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
         "name": "prover",
         "type": "address",
         "indexed": true,
@@ -1166,12 +1266,6 @@
         "type": "uint16",
         "indexed": false,
         "internalType": "uint16"
-      },
-      {
-        "name": "contestations",
-        "type": "uint8",
-        "indexed": false,
-        "internalType": "uint8"
       }
     ],
     "anonymous": false
@@ -1187,12 +1281,6 @@
         "internalType": "uint256"
       },
       {
-        "name": "assignedProver",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
         "name": "prover",
         "type": "address",
         "indexed": true,
@@ -1215,72 +1303,6 @@
         "type": "uint16",
         "indexed": false,
         "internalType": "uint16"
-      },
-      {
-        "name": "contestations",
-        "type": "uint8",
-        "indexed": false,
-        "internalType": "uint8"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "EthDeposited",
-    "inputs": [
-      {
-        "name": "deposit",
-        "type": "tuple",
-        "indexed": false,
-        "internalType": "struct TaikoData.EthDeposit",
-        "components": [
-          {
-            "name": "recipient",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amount",
-            "type": "uint96",
-            "internalType": "uint96"
-          },
-          {
-            "name": "id",
-            "type": "uint64",
-            "internalType": "uint64"
-          }
-        ]
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "EthDeposited",
-    "inputs": [
-      {
-        "name": "deposit",
-        "type": "tuple",
-        "indexed": false,
-        "internalType": "struct TaikoData.EthDeposit",
-        "components": [
-          {
-            "name": "recipient",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amount",
-            "type": "uint96",
-            "internalType": "uint96"
-          },
-          {
-            "name": "id",
-            "type": "uint64",
-            "internalType": "uint64"
-          }
-        ]
       }
     ],
     "anonymous": false
@@ -1358,6 +1380,119 @@
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProvingPaused",
+    "inputs": [
+      {
+        "name": "paused",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "StateVariablesUpdated",
+    "inputs": [
+      {
+        "name": "slotB",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct TaikoData.SlotB",
+        "components": [
+          {
+            "name": "numBlocks",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastVerifiedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "provingPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "__reservedB1",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "__reservedB2",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "__reservedB3",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "lastUnpausedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "StateVariablesUpdated",
+    "inputs": [
+      {
+        "name": "slotB",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct TaikoData.SlotB",
+        "components": [
+          {
+            "name": "numBlocks",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "lastVerifiedBlockId",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "provingPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "__reservedB1",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "__reservedB2",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "__reservedB3",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "lastUnpausedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
       }
     ],
     "anonymous": false
@@ -1631,6 +1766,11 @@
   },
   {
     "type": "error",
+    "name": "FUNC_NOT_IMPLEMENTED",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "INVALID_PAUSE_STATUS",
     "inputs": []
   },
@@ -1656,16 +1796,6 @@
   },
   {
     "type": "error",
-    "name": "L1_ASSIGNED_PROVER_NOT_ALLOWED",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "L1_ASSIGNED_PROVER_NOT_ALLOWED",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "L1_BLOB_NOT_AVAILABLE",
     "inputs": []
   },
@@ -1697,6 +1827,21 @@
   {
     "type": "error",
     "name": "L1_BLOCK_MISMATCH",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_CANNOT_CONTEST",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_CANNOT_CONTEST",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_INVALID_BLOCK_ID",
     "inputs": []
   },
   {
@@ -1716,12 +1861,17 @@
   },
   {
     "type": "error",
-    "name": "L1_INVALID_ETH_DEPOSIT",
+    "name": "L1_INVALID_CONFIG",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "L1_INVALID_ETH_DEPOSIT",
+    "name": "L1_INVALID_GENESIS_HASH",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_INVALID_GENESIS_HASH",
     "inputs": []
   },
   {
@@ -1746,12 +1896,27 @@
   },
   {
     "type": "error",
+    "name": "L1_INVALID_PAUSE_STATUS",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "L1_INVALID_PROVER",
     "inputs": []
   },
   {
     "type": "error",
     "name": "L1_INVALID_PROVER",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_INVALID_SIG",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_INVALID_SIG",
     "inputs": []
   },
   {
@@ -1786,32 +1951,12 @@
   },
   {
     "type": "error",
-    "name": "L1_MISSING_VERIFIER",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "L1_MISSING_VERIFIER",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "L1_NOT_ASSIGNED_PROVER",
     "inputs": []
   },
   {
     "type": "error",
     "name": "L1_NOT_ASSIGNED_PROVER",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "L1_PROPOSER_NOT_EOA",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "L1_PROPOSER_NOT_EOA",
     "inputs": []
   },
   {
@@ -1826,7 +1971,12 @@
   },
   {
     "type": "error",
-    "name": "L1_TOO_MANY_BLOCKS",
+    "name": "L1_TOO_LATE",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_TOO_LATE",
     "inputs": []
   },
   {
@@ -1836,7 +1986,7 @@
   },
   {
     "type": "error",
-    "name": "L1_TOO_MANY_TIERS",
+    "name": "L1_TOO_MANY_BLOCKS",
     "inputs": []
   },
   {
@@ -1847,6 +1997,11 @@
   {
     "type": "error",
     "name": "L1_TRANSITION_ID_ZERO",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "L1_TRANSITION_NOT_FOUND",
     "inputs": []
   },
   {
@@ -1922,7 +2077,12 @@
   },
   {
     "type": "error",
-    "name": "ZERO_ADDR_MANAGER",
+    "name": "ZERO_ADDRESS",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZERO_VALUE",
     "inputs": []
   }
 ]

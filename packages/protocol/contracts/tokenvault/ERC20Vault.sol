@@ -4,9 +4,11 @@ pragma solidity 0.8.24;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "../bridge/IBridge.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "../bridge/IQuotaManager.sol";
+import "../common/LibStrings.sol";
 import "../libs/LibAddress.sol";
-import "./BridgedERC20.sol";
+import "./IBridgedERC20.sol";
 import "./BaseVault.sol";
 
 /// @title ERC20Vault
@@ -16,8 +18,11 @@ import "./BaseVault.sol";
 /// @dev Labeled in AddressResolver as "erc20_vault".
 /// @custom:security-contact security@taiko.xyz
 contract ERC20Vault is BaseVault {
+    using Address for address;
     using LibAddress for address;
     using SafeERC20 for IERC20;
+
+    uint256 public constant MIN_MIGRATION_DELAY = 90 days;
 
     /// @dev Represents a canonical ERC20 token.
     struct CanonicalERC20 {
@@ -29,16 +34,15 @@ contract ERC20Vault is BaseVault {
     }
 
     /// @dev Represents an operation to send tokens to another chain.
+    /// 4 slots
     struct BridgeTransferOp {
         uint64 destChainId;
         address destOwner;
         address to;
+        uint64 fee;
         address token;
+        uint32 gasLimit;
         uint256 amount;
-        uint256 gasLimit;
-        uint256 fee;
-        address refundTo;
-        string memo;
     }
 
     /// @notice Mappings from bridged tokens to their canonical tokens.
@@ -49,9 +53,13 @@ contract ERC20Vault is BaseVault {
     mapping(uint256 chainId => mapping(address ctoken => address btoken)) public canonicalToBridged;
 
     /// @notice Mappings from bridged tokens to their blacklist status.
-    mapping(address btoken => bool blacklisted) public btokenBlacklist;
+    mapping(address btoken => bool denied) public btokenDenylist;
 
-    uint256[47] private __gap;
+    /// @notice Mappings from ctoken to its last migration timestamp.
+    mapping(uint256 chainId => mapping(address ctoken => uint256 timestamp)) public
+        lastMigrationStart;
+
+    uint256[46] private __gap;
 
     /// @notice Emitted when a new bridged token is deployed.
     /// @param srcChainId The chain ID of the canonical token.
@@ -137,9 +145,16 @@ contract ERC20Vault is BaseVault {
     error VAULT_CTOKEN_MISMATCH();
     error VAULT_INVALID_TOKEN();
     error VAULT_INVALID_AMOUNT();
+    error VAULT_INVALID_CTOKEN();
     error VAULT_INVALID_NEW_BTOKEN();
-    error VAULT_INVALID_TO();
-    error VAULT_NOT_SAME_OWNER();
+    error VAULT_LAST_MIGRATION_TOO_CLOSE();
+
+    /// @notice Initializes the contract.
+    /// @param _owner The owner of this contract. msg.sender will be used if this value is zero.
+    /// @param _addressManager The address of the {AddressManager} contract.
+    function init(address _owner, address _addressManager) external initializer {
+        __Essential_init(_owner, _addressManager);
+    }
 
     /// @notice Change bridged token.
     /// @param _ctoken The canonical token.
@@ -150,19 +165,26 @@ contract ERC20Vault is BaseVault {
         address _btokenNew
     )
         external
-        nonReentrant
-        whenNotPaused
         onlyOwner
+        nonReentrant
         returns (address btokenOld_)
     {
-        if (_btokenNew == address(0) || bridgedToCanonical[_btokenNew].addr != address(0)) {
+        if (
+            _btokenNew == address(0) || bridgedToCanonical[_btokenNew].addr != address(0)
+                || !_btokenNew.isContract()
+        ) {
             revert VAULT_INVALID_NEW_BTOKEN();
         }
 
-        if (btokenBlacklist[_btokenNew]) revert VAULT_BTOKEN_BLACKLISTED();
+        if (_ctoken.addr == address(0) || _ctoken.chainId == block.chainid) {
+            revert VAULT_INVALID_CTOKEN();
+        }
 
-        if (IBridgedERC20(_btokenNew).owner() != owner()) {
-            revert VAULT_NOT_SAME_OWNER();
+        if (btokenDenylist[_btokenNew]) revert VAULT_BTOKEN_BLACKLISTED();
+
+        uint256 _lastMigrationStart = lastMigrationStart[_ctoken.chainId][_ctoken.addr];
+        if (block.timestamp < _lastMigrationStart + MIN_MIGRATION_DELAY) {
+            revert VAULT_LAST_MIGRATION_TOO_CLOSE();
         }
 
         btokenOld_ = canonicalToBridged[_ctoken.chainId][_ctoken.addr];
@@ -171,22 +193,26 @@ contract ERC20Vault is BaseVault {
             CanonicalERC20 memory ctoken = bridgedToCanonical[btokenOld_];
 
             // The ctoken must match the saved one.
-            if (
-                ctoken.decimals != _ctoken.decimals
-                    || keccak256(bytes(ctoken.symbol)) != keccak256(bytes(_ctoken.symbol))
-                    || keccak256(bytes(ctoken.name)) != keccak256(bytes(_ctoken.name))
-            ) revert VAULT_CTOKEN_MISMATCH();
+            if (keccak256(abi.encode(_ctoken)) != keccak256(abi.encode(ctoken))) {
+                revert VAULT_CTOKEN_MISMATCH();
+            }
 
             delete bridgedToCanonical[btokenOld_];
-            btokenBlacklist[btokenOld_] = true;
+            btokenDenylist[btokenOld_] = true;
 
             // Start the migration
-            IBridgedERC20(btokenOld_).changeMigrationStatus(_btokenNew, false);
-            IBridgedERC20(_btokenNew).changeMigrationStatus(btokenOld_, true);
+            if (
+                btokenOld_.supportsInterface(type(IBridgedERC20Migratable).interfaceId)
+                    && _btokenNew.supportsInterface(type(IBridgedERC20Migratable).interfaceId)
+            ) {
+                IBridgedERC20Migratable(btokenOld_).changeMigrationStatus(_btokenNew, false);
+                IBridgedERC20Migratable(_btokenNew).changeMigrationStatus(btokenOld_, true);
+            }
         }
 
         bridgedToCanonical[_btokenNew] = _ctoken;
         canonicalToBridged[_ctoken.chainId][_ctoken.addr] = _btokenNew;
+        lastMigrationStart[_ctoken.chainId][_ctoken.addr] = block.timestamp;
 
         emit BridgedTokenChanged({
             srcChainId: _ctoken.chainId,
@@ -207,16 +233,17 @@ contract ERC20Vault is BaseVault {
     function sendToken(BridgeTransferOp calldata _op)
         external
         payable
-        nonReentrant
         whenNotPaused
+        nonReentrant
         returns (IBridge.Message memory message_)
     {
         if (_op.amount == 0) revert VAULT_INVALID_AMOUNT();
         if (_op.token == address(0)) revert VAULT_INVALID_TOKEN();
-        if (btokenBlacklist[_op.token]) revert VAULT_BTOKEN_BLACKLISTED();
+        if (btokenDenylist[_op.token]) revert VAULT_BTOKEN_BLACKLISTED();
+        if (msg.value < _op.fee) revert VAULT_INSURFICIENT_FEE();
 
         (bytes memory data, CanonicalERC20 memory ctoken, uint256 balanceChange) =
-            _handleMessage(msg.sender, _op.token, _op.to, _op.amount);
+            _handleMessage(_op);
 
         IBridge.Message memory message = IBridge.Message({
             id: 0, // will receive a new value
@@ -226,17 +253,15 @@ contract ERC20Vault is BaseVault {
             srcOwner: msg.sender,
             destOwner: _op.destOwner != address(0) ? _op.destOwner : msg.sender,
             to: resolve(_op.destChainId, name(), false),
-            refundTo: _op.refundTo,
             value: msg.value - _op.fee,
             fee: _op.fee,
             gasLimit: _op.gasLimit,
-            data: data,
-            memo: _op.memo
+            data: data
         });
 
         bytes32 msgHash;
         (msgHash, message_) =
-            IBridge(resolve("bridge", false)).sendMessage{ value: msg.value }(message);
+            IBridge(resolve(LibStrings.B_BRIDGE, false)).sendMessage{ value: msg.value }(message);
 
         emit TokenSent({
             msgHash: msgHash,
@@ -250,7 +275,7 @@ contract ERC20Vault is BaseVault {
     }
 
     /// @inheritdoc IMessageInvocable
-    function onMessageInvocation(bytes calldata _data) public payable nonReentrant whenNotPaused {
+    function onMessageInvocation(bytes calldata _data) public payable whenNotPaused nonReentrant {
         (CanonicalERC20 memory ctoken, address from, address to, uint256 amount) =
             abi.decode(_data, (CanonicalERC20, address, address, uint256));
 
@@ -259,7 +284,7 @@ contract ERC20Vault is BaseVault {
 
         // Don't allow sending to disallowed addresses.
         // Don't send the tokens back to `from` because `from` is on the source chain.
-        if (to == address(0) || to == address(this)) revert VAULT_INVALID_TO();
+        checkToAddress(to);
 
         // Transfer the ETH and the tokens to the `to` address
         address token = _transferTokens(ctoken, to, amount);
@@ -284,8 +309,8 @@ contract ERC20Vault is BaseVault {
         external
         payable
         override
-        nonReentrant
         whenNotPaused
+        nonReentrant
     {
         // `onlyFromBridge` checked in checkRecallMessageContext
         checkRecallMessageContext();
@@ -309,7 +334,7 @@ contract ERC20Vault is BaseVault {
 
     /// @inheritdoc BaseVault
     function name() public pure override returns (bytes32) {
-        return "erc20_vault";
+        return LibStrings.B_ERC20_VAULT;
     }
 
     function _transferTokens(
@@ -325,58 +350,56 @@ contract ERC20Vault is BaseVault {
             IERC20(token_).safeTransfer(_to, _amount);
         } else {
             token_ = _getOrDeployBridgedToken(_ctoken);
+            //For native bridged tokens (like USDC), the mint() signature is the same, so no need to
+            // check.
             IBridgedERC20(token_).mint(_to, _amount);
         }
+
+        _consumeTokenQuota(token_, _amount);
     }
 
     /// @dev Handles the message on the source chain and returns the encoded
     /// call on the destination call.
-    /// @param _user The user's address.
-    /// @param _token The token address.
-    /// @param _to To address.
-    /// @param _amount Amount to be sent.
+    /// @param _op The BridgeTransferOp object.
     /// @return msgData_ Encoded message data.
     /// @return ctoken_ The canonical token.
     /// @return balanceChange_ User token balance actual change after the token
     /// transfer. This value is calculated so we do not assume token balance
     /// change is the amount of token transferred away.
-    function _handleMessage(
-        address _user,
-        address _token,
-        address _to,
-        uint256 _amount
-    )
+    function _handleMessage(BridgeTransferOp calldata _op)
         private
         returns (bytes memory msgData_, CanonicalERC20 memory ctoken_, uint256 balanceChange_)
     {
         // If it's a bridged token
-        if (bridgedToCanonical[_token].addr != address(0)) {
-            ctoken_ = bridgedToCanonical[_token];
-            IBridgedERC20(_token).burn(msg.sender, _amount);
-            balanceChange_ = _amount;
+        CanonicalERC20 storage _ctoken = bridgedToCanonical[_op.token];
+        if (_ctoken.addr != address(0)) {
+            ctoken_ = _ctoken;
+            // Following the "transfer and burn" pattern, as used by USDC
+            IERC20(_op.token).safeTransferFrom(msg.sender, address(this), _op.amount);
+            IBridgedERC20(_op.token).burn(_op.amount);
+            balanceChange_ = _op.amount;
         } else {
             // If it's a canonical token
-            IERC20Metadata meta = IERC20Metadata(_token);
             ctoken_ = CanonicalERC20({
                 chainId: uint64(block.chainid),
-                addr: _token,
-                decimals: meta.decimals(),
-                symbol: meta.symbol(),
-                name: meta.name()
+                addr: _op.token,
+                decimals: _safeDecimals(_op.token),
+                symbol: safeSymbol(_op.token),
+                name: safeName(_op.token)
             });
 
             // Query the balance then query it again to get the actual amount of
             // token transferred into this address, this is more accurate than
             // simply using `amount` -- some contract may deduct a fee from the
             // transferred amount.
-            IERC20 t = IERC20(_token);
+            IERC20 t = IERC20(_op.token);
             uint256 _balance = t.balanceOf(address(this));
-            t.safeTransferFrom({ from: msg.sender, to: address(this), value: _amount });
+            t.safeTransferFrom(msg.sender, address(this), _op.amount);
             balanceChange_ = t.balanceOf(address(this)) - _balance;
         }
 
         msgData_ = abi.encodeCall(
-            this.onMessageInvocation, abi.encode(ctoken_, _user, _to, balanceChange_)
+            this.onMessageInvocation, abi.encode(ctoken_, msg.sender, _op.to, balanceChange_)
         );
     }
 
@@ -401,7 +424,7 @@ contract ERC20Vault is BaseVault {
     /// @return btoken Address of the deployed bridged token contract.
     function _deployBridgedToken(CanonicalERC20 memory ctoken) private returns (address btoken) {
         bytes memory data = abi.encodeCall(
-            BridgedERC20.init,
+            IBridgedERC20Initializable.init,
             (
                 owner(),
                 addressManager,
@@ -413,7 +436,7 @@ contract ERC20Vault is BaseVault {
             )
         );
 
-        btoken = address(new ERC1967Proxy(resolve("bridged_erc20", false), data));
+        btoken = address(new ERC1967Proxy(resolve(LibStrings.B_BRIDGED_ERC20, false), data));
         bridgedToCanonical[btoken] = ctoken;
         canonicalToBridged[ctoken.chainId][ctoken.addr] = btoken;
 
@@ -425,5 +448,18 @@ contract ERC20Vault is BaseVault {
             ctokenName: ctoken.name,
             ctokenDecimal: ctoken.decimals
         });
+    }
+
+    function _consumeTokenQuota(address _token, uint256 _amount) private {
+        address quotaManager = resolve(LibStrings.B_QUOTA_MANAGER, true);
+        if (quotaManager != address(0)) {
+            IQuotaManager(quotaManager).consumeQuota(_token, _amount);
+        }
+    }
+
+    function _safeDecimals(address _token) private view returns (uint8) {
+        (bool success, bytes memory data) =
+            address(_token).staticcall(abi.encodeCall(IERC20Metadata.decimals, ()));
+        return success && data.length == 32 ? abi.decode(data, (uint8)) : 18;
     }
 }

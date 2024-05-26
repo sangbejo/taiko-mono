@@ -12,7 +12,6 @@ import (
 	"github.com/taikoxyz/taiko-mono/packages/eventindexer"
 	"github.com/taikoxyz/taiko-mono/packages/eventindexer/contracts/assignmenthook"
 	"github.com/taikoxyz/taiko-mono/packages/eventindexer/contracts/bridge"
-	"github.com/taikoxyz/taiko-mono/packages/eventindexer/contracts/swap"
 	"github.com/taikoxyz/taiko-mono/packages/eventindexer/contracts/taikol1"
 	"github.com/taikoxyz/taiko-mono/packages/eventindexer/pkg/repo"
 	"github.com/urfave/cli/v2"
@@ -38,7 +37,6 @@ var (
 type Indexer struct {
 	accountRepo    eventindexer.AccountRepository
 	eventRepo      eventindexer.EventRepository
-	statRepo       eventindexer.StatRepository
 	nftBalanceRepo eventindexer.NFTBalanceRepository
 	txRepo         eventindexer.TransactionRepository
 
@@ -53,7 +51,6 @@ type Indexer struct {
 	taikol1        *taikol1.TaikoL1
 	bridge         *bridge.Bridge
 	assignmentHook *assignmenthook.AssignmentHook
-	swaps          []*swap.Swap
 
 	indexNfts bool
 	layer     string
@@ -130,11 +127,6 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) error {
 		return err
 	}
 
-	statRepository, err := repo.NewStatRepository(db)
-	if err != nil {
-		return err
-	}
-
 	nftBalanceRepository, err := repo.NewNFTBalanceRepository(db)
 	if err != nil {
 		return err
@@ -158,6 +150,8 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) error {
 	var taikoL1 *taikol1.TaikoL1
 
 	if cfg.L1TaikoAddress.Hex() != ZeroAddress.Hex() {
+		slog.Info("setting l1TaikoAddress", "addr", cfg.L1TaikoAddress.Hex())
+
 		taikoL1, err = taikol1.NewTaikoL1(cfg.L1TaikoAddress, ethClient)
 		if err != nil {
 			return errors.Wrap(err, "contracts.NewTaikoL1")
@@ -167,6 +161,8 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) error {
 	var bridgeContract *bridge.Bridge
 
 	if cfg.BridgeAddress.Hex() != ZeroAddress.Hex() {
+		slog.Info("setting bridgeADdress", "addr", cfg.BridgeAddress.Hex())
+
 		bridgeContract, err = bridge.NewBridge(cfg.BridgeAddress, ethClient)
 		if err != nil {
 			return errors.Wrap(err, "contracts.NewBridge")
@@ -176,29 +172,17 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) error {
 	var assignmentHookContract *assignmenthook.AssignmentHook
 
 	if cfg.AssignmentHookAddress.Hex() != ZeroAddress.Hex() {
+		slog.Info("setting assignmentHookAddress", "addr", cfg.AssignmentHookAddress.Hex())
+
 		assignmentHookContract, err = assignmenthook.NewAssignmentHook(cfg.AssignmentHookAddress, ethClient)
 		if err != nil {
-			return errors.Wrap(err, "contracts.NewBridge")
-		}
-	}
-
-	var swapContracts []*swap.Swap
-
-	if cfg.SwapAddresses != nil && len(cfg.SwapAddresses) > 0 {
-		for _, v := range cfg.SwapAddresses {
-			swapContract, err := swap.NewSwap(v, ethClient)
-			if err != nil {
-				return errors.Wrap(err, "contracts.NewBridge")
-			}
-
-			swapContracts = append(swapContracts, swapContract)
+			return errors.Wrap(err, "contracts.NewAssignmentHook")
 		}
 	}
 
 	i.blockSaveMutex = &sync.Mutex{}
 	i.accountRepo = accountRepository
 	i.eventRepo = eventRepository
-	i.statRepo = statRepository
 	i.nftBalanceRepo = nftBalanceRepository
 	i.txRepo = txRepository
 
@@ -208,7 +192,6 @@ func InitFromConfig(ctx context.Context, i *Indexer, cfg *Config) error {
 	i.taikol1 = taikoL1
 	i.bridge = bridgeContract
 	i.assignmentHook = assignmentHookContract
-	i.swaps = swapContracts
 	i.blockBatchSize = cfg.BlockBatchSize
 	i.subscriptionBackoff = time.Duration(cfg.SubscriptionBackoff) * time.Second
 	i.wg = &sync.WaitGroup{}

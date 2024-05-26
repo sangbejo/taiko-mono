@@ -1,15 +1,20 @@
 {
-  "draft": true,
   "packages": {
-    "packages/blobstorage": {},
     "packages/branding": {},
     "packages/bridge-ui": {},
+    "packages/docs-site": {},
     "packages/eventindexer": {},
     "packages/fork-diff": {},
     "packages/guardian-prover-health-check": {},
     "packages/guardian-prover-health-check-ui": {},
     "packages/protocol": {},
-    "packages/relayer": {}
+    "packages/relayer": {},
+    "packages/nfts": {},
+    "packages/taikoon-ui": {},
+    "packages/taiko-client": {},
+    "packages/supplementary-contracts": {},
+    "packages/ui-lib": {},
+    "packages/snaefell-ui": {}
   },
   "separate-pull-requests": true
 }

@@ -11,6 +11,8 @@ library LibNetwork {
     uint256 internal constant HOLESKY = 17_000;
     uint256 internal constant SEPOLIA = 11_155_111;
 
+    uint64 internal constant TAIKO = 167_000;
+
     /// @dev Checks if the chain ID represents an Ethereum testnet.
     /// @param _chainId The chain ID.
     /// @return true if the chain ID represents an Ethereum testnet, false otherwise.
@@ -28,9 +30,17 @@ library LibNetwork {
         return _chainId == LibNetwork.MAINNET || isEthereumTestnet(_chainId);
     }
 
-    /// @dev Checks if the chain ID represents an internal Taiko devnet.
+    /// @dev Checks if the chain ID represents the Taiko L2 mainnet.
     /// @param _chainId The chain ID.
-    /// @return true if the chain ID represents an internal Taiko devnet, false otherwise.
+    /// @return true if the chain ID represents the Taiko L2 mainnet.
+    function isTaikoMainnet(uint256 _chainId) internal pure returns (bool) {
+        return _chainId == TAIKO;
+    }
+
+    /// @dev Checks if the chain ID represents an internal Taiko devnet's base layer.
+    /// @param _chainId The chain ID.
+    /// @return true if the chain ID represents an internal Taiko devnet's base layer, false
+    /// otherwise.
     function isTaikoDevnet(uint256 _chainId) internal pure returns (bool) {
         return _chainId >= 32_300 && _chainId <= 32_400;
     }
@@ -41,6 +51,6 @@ library LibNetwork {
     /// @return true if the chain supports Dencun hardfork, false otherwise.
     function isDencunSupported(uint256 _chainId) internal pure returns (bool) {
         return _chainId == LibNetwork.MAINNET || _chainId == LibNetwork.HOLESKY
-            || _chainId == LibNetwork.SEPOLIA;
+            || _chainId == LibNetwork.SEPOLIA || isTaikoDevnet(_chainId);
     }
 }

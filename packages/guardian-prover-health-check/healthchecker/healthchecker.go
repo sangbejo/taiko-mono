@@ -84,6 +84,8 @@ func InitFromConfig(ctx context.Context, h *HealthChecker, cfg *Config) (err err
 		return err
 	}
 
+	slog.Info("guardianProverContractAddress", "addr", common.HexToAddress(cfg.GuardianProverContractAddress))
+
 	guardianProverContract, err := guardianprover.NewGuardianProver(
 		common.HexToAddress(cfg.GuardianProverContractAddress),
 		l1EthClient,
@@ -96,6 +98,8 @@ func InitFromConfig(ctx context.Context, h *HealthChecker, cfg *Config) (err err
 	if err != nil {
 		return err
 	}
+
+	slog.Info("number of guardians", "numGuardians", numGuardians.Int64())
 
 	var guardianProvers []guardianproverhealthcheck.GuardianProver
 
@@ -114,7 +118,7 @@ func InitFromConfig(ctx context.Context, h *HealthChecker, cfg *Config) (err err
 
 		guardianProvers = append(guardianProvers, guardianproverhealthcheck.GuardianProver{
 			Address: guardianAddress,
-			ID:      guardianId,
+			ID:      new(big.Int).Sub(guardianId, common.Big1),
 			HealthCheckCounter: promauto.NewCounter(prometheus.CounterOpts{
 				Name: fmt.Sprintf("guardian_prover_%v_health_checks_ops_total", guardianId.Uint64()),
 				Help: "The total number of health checks",

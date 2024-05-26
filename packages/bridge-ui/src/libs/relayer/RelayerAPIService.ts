@@ -16,9 +16,12 @@ import {
   type APIRequestParams,
   type APIResponse,
   type APIResponseTransaction,
+  type Fee,
+  type FeeType,
   type GetAllByAddressResponse,
   type PaginationInfo,
   type PaginationParams,
+  type ProcessingFeeApiResponse,
   type RelayerBlockInfo,
   RelayerEventType,
 } from './types';
@@ -186,20 +189,19 @@ export class RelayerAPIService {
         msgHash: tx.msgHash,
         tokenType: _eventToTokenType(tx.eventType),
         blockNumber: tx.data.Raw.blockNumber,
+        canonicalTokenAddress: tx.canonicalTokenAddress,
         message: {
           id: tx.data.Message.Id,
           to: tx.data.Message.To,
           destOwner: tx.data.Message.DestOwner,
           data: data as Hex,
-          memo: tx.data.Message.Memo,
           srcOwner: tx.data.Message.SrcOwner,
           from: tx.data.Message.From,
-          gasLimit: BigInt(tx.data.Message.GasLimit),
+          gasLimit: Number(tx.data.Message.GasLimit),
           value: BigInt(tx.data.Message.Value),
           srcChainId: BigInt(tx.data.Message.SrcChainId),
           destChainId: BigInt(tx.data.Message.DestChainId),
           fee: BigInt(tx.data.Message.Fee),
-          refundTo: tx.data.Message.RefundTo,
         },
       } satisfies BridgeTransaction;
 
@@ -277,6 +279,39 @@ export class RelayerAPIService {
     destChainId: number;
   }): Promise<Record<number, RelayerBlockInfo>> {
     throw new Error('Not implemented');
+  }
+
+  async recommendedProcessingFees({
+    typeFilter,
+    destChainIDFilter,
+  }: {
+    typeFilter?: FeeType;
+    destChainIDFilter?: number;
+  }): Promise<Fee[]> {
+    const requestURL = `${this.baseUrl}/recommendedProcessingFees`;
+
+    try {
+      const response = await axios.get<ProcessingFeeApiResponse>(requestURL);
+
+      if (response.status >= 400) throw new Error('HTTP error', { cause: response });
+
+      let { fees } = response.data;
+
+      if (typeFilter) {
+        fees = fees.filter((fee) => fee.type === typeFilter);
+      }
+
+      if (destChainIDFilter !== undefined) {
+        fees = fees.filter((fee) => fee.destChainID === destChainIDFilter);
+      }
+
+      return fees;
+    } catch (error) {
+      console.error(error);
+      throw new Error('Failed to fetch recommended processing fees', {
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
   }
 }
 

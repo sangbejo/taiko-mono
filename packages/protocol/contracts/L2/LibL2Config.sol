@@ -6,7 +6,6 @@ library LibL2Config {
     struct Config {
         uint32 gasTargetPerL1Block;
         uint8 basefeeAdjustmentQuotient;
-        uint64 gasExcessMinValue;
     }
 
     /// @notice Returns EIP1559 related configurations.
@@ -17,8 +16,5 @@ library LibL2Config {
         // We need to monitor L2 state growth and lower this value when necessary.
         config_.gasTargetPerL1Block = 60_000_000;
         config_.basefeeAdjustmentQuotient = 8;
-
-        // This value is picked to make the min base fee close to but slightly smaller than 0.1gwei
-        config_.gasExcessMinValue = 18_435_000_000;
     }
 }

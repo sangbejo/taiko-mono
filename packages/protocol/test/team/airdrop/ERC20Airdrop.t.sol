@@ -2,7 +2,6 @@
 pragma solidity 0.8.24;
 
 import "../../TaikoTest.sol";
-import "./LibDelegationSigUtil.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 contract MockERC20Airdrop is ERC20Airdrop {
@@ -103,14 +102,14 @@ contract TestERC20Airdrop is TaikoTest {
                 data: abi.encodeCall(
                     BridgedERC20.init,
                     (address(0), address(addressManager), randAddress(), 100, 18, "TKO", "Taiko Token")
-                    )
+                )
             })
         );
 
         vm.stopPrank();
 
         // 5. Mint (AKA transfer) to the vault. This step on mainnet will be done by Taiko Labs. For
-        // testing on A6 the imporatnt thing is: HAVE tokens in this vault!
+        // testing on A6 the important thing is: HAVE tokens in this vault!
         vm.prank(address(vault), owner);
         BridgedERC20(token).mint(address(vault), 1_000_000_000e18);
 
@@ -130,7 +129,7 @@ contract TestERC20Airdrop is TaikoTest {
                 data: abi.encodeCall(
                     ERC20Airdrop.init,
                     (address(0), claimStart, claimEnd, merkleRoot, address(token), address(vault))
-                    )
+                )
             })
         );
 
@@ -147,70 +146,13 @@ contract TestERC20Airdrop is TaikoTest {
         vm.roll(block.number + 1);
     }
 
-    function getAliceDelegatesToBobSignature()
-        public
-        view
-        returns (address delegatee, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s)
-    {
-        // Query user's nonce
-        nonce = BridgedERC20(token).nonces(Bob);
-        expiry = block.timestamp + 1_000_000;
-        delegatee = Bob;
-
-        LibDelegationSigUtil.Delegate memory delegate;
-        delegate.delegatee = delegatee;
-        delegate.nonce = nonce;
-        delegate.expiry = expiry;
-        bytes32 hash = LibDelegationSigUtil.getTypedDataHash(delegate, address(token));
-
-        // 0x2 is Alice's private key
-        (v, r, s) = vm.sign(0x1, hash);
-    }
-
-    function test_claimAndDelegate() public {
+    function test_claim() public {
         vm.warp(claimStart);
 
-        // 1. Alice puts together the HASH (for delegating BOB) and signs it too.
-        (address delegatee, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s) =
-            getAliceDelegatesToBobSignature();
-        // 2. Encode data
-        bytes memory delegationData = abi.encode(delegatee, nonce, expiry, v, r, s);
         vm.prank(Alice, Alice);
-        airdrop.claimAndDelegate(Alice, 100, merkleProof, delegationData);
+        airdrop.claim(Alice, 100, merkleProof);
 
         // Check Alice balance
         assertEq(token.balanceOf(Alice), 100);
-        // Check who is delegatee, shall be Bob
-        assertEq(token.delegates(Alice), Bob);
-    }
-
-    function test_claimAndDelegate_with_wrong_delegation_data() public {
-        vm.warp(claimStart);
-
-        bytes memory delegation = bytes("");
-
-        vm.expectRevert(); //invalid delegate signature
-        vm.prank(Lily, Lily);
-        airdrop.claimAndDelegate(Lily, 100, merkleProof, delegation);
-
-        vm.prank(owner, owner);
-        token.approve(address(airdrop), 1_000_000_000e18);
-
-        vm.expectRevert(); // cannot decode the delegation data
-        vm.prank(Lily, Lily);
-        airdrop.claimAndDelegate(Lily, 100, merkleProof, delegation);
-
-        address delegatee = randAddress();
-        uint256 nonce = 1;
-        uint256 expiry = block.timestamp + 10_000;
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-
-        delegation = abi.encode(delegatee, nonce, expiry, v, r, s);
-
-        vm.expectRevert(); // signature invalid
-        vm.prank(Lily, Lily);
-        airdrop.claimAndDelegate(Lily, 100, merkleProof, delegation);
     }
 }

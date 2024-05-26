@@ -1,45 +1,6 @@
 [
   {
     "type": "function",
-    "name": "ERC1155_INTERFACE_ID",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "ERC721_INTERFACE_ID",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MAX_TOKEN_PER_TXN",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "acceptOwnership",
     "inputs": [],
     "outputs": [],
@@ -118,6 +79,32 @@
   },
   {
     "type": "function",
+    "name": "impl",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "inNonReentrant",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "init",
     "inputs": [
       {
@@ -133,6 +120,19 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "lastUnpausedAt",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -205,8 +205,18 @@
         "components": [
           {
             "name": "id",
-            "type": "uint128",
-            "internalType": "uint128"
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fee",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "gasLimit",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
             "name": "from",
@@ -219,14 +229,14 @@
             "internalType": "uint64"
           },
           {
-            "name": "destChainId",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
             "name": "srcOwner",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "destChainId",
+            "type": "uint64",
+            "internalType": "uint64"
           },
           {
             "name": "destOwner",
@@ -239,22 +249,7 @@
             "internalType": "address"
           },
           {
-            "name": "refundTo",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
             "name": "value",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "fee",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "gasLimit",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -262,11 +257,6 @@
             "name": "data",
             "type": "bytes",
             "internalType": "bytes"
-          },
-          {
-            "name": "memo",
-            "type": "string",
-            "internalType": "string"
           }
         ]
       },
@@ -423,9 +413,19 @@
             "internalType": "address"
           },
           {
+            "name": "fee",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
             "name": "token",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "gasLimit",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
             "name": "tokenIds",
@@ -436,26 +436,6 @@
             "name": "amounts",
             "type": "uint256[]",
             "internalType": "uint256[]"
-          },
-          {
-            "name": "gasLimit",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "fee",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "refundTo",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "memo",
-            "type": "string",
-            "internalType": "string"
           }
         ]
       }
@@ -468,8 +448,18 @@
         "components": [
           {
             "name": "id",
-            "type": "uint128",
-            "internalType": "uint128"
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fee",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "gasLimit",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
             "name": "from",
@@ -482,14 +472,14 @@
             "internalType": "uint64"
           },
           {
-            "name": "destChainId",
-            "type": "uint64",
-            "internalType": "uint64"
-          },
-          {
             "name": "srcOwner",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "destChainId",
+            "type": "uint64",
+            "internalType": "uint64"
           },
           {
             "name": "destOwner",
@@ -502,22 +492,7 @@
             "internalType": "address"
           },
           {
-            "name": "refundTo",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
             "name": "value",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "fee",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "gasLimit",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -525,11 +500,6 @@
             "name": "data",
             "type": "bytes",
             "internalType": "bytes"
-          },
-          {
-            "name": "memo",
-            "type": "string",
-            "internalType": "string"
           }
         ]
       }
@@ -925,6 +895,11 @@
   },
   {
     "type": "error",
+    "name": "FUNC_NOT_IMPLEMENTED",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "INVALID_PAUSE_STATUS",
     "inputs": []
   },
@@ -976,17 +951,12 @@
   },
   {
     "type": "error",
-    "name": "VAULT_INVALID_TO",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "VAULT_INVALID_TOKEN",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "VAULT_MAX_TOKEN_PER_TXN_EXCEEDED",
+    "name": "VAULT_INVALID_TO_ADDR",
     "inputs": []
   },
   {
@@ -1001,7 +971,12 @@
   },
   {
     "type": "error",
-    "name": "ZERO_ADDR_MANAGER",
+    "name": "ZERO_ADDRESS",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZERO_VALUE",
     "inputs": []
   }
 ]

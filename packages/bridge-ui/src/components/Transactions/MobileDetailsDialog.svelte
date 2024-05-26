@@ -31,8 +31,7 @@
   let openStatusDialog = false;
 
   let tooltipOpen = false;
-  const openToolTip = (event: Event) => {
-    event.stopPropagation();
+  const openToolTip = () => {
     tooltipOpen = !tooltipOpen;
   };
   let dialogId = `dialog-${uid()}`;
@@ -56,9 +55,9 @@
   let canonicalAddress: Address | null;
   let canonicalChain: number | null;
 
-  $: if (token && !fetchingAddress && !canonicalAddress && !bridgedAddress) {
-    fetchTokenAddresses();
-  }
+  const forwardEvent = (e: CustomEvent) => {
+    dispatch(e.type, e.detail);
+  };
 
   const fetchTokenAddresses = async () => {
     if (!token) return;
@@ -86,6 +85,9 @@
     fetchingAddress = false;
   };
 
+  $: if (token && !fetchingAddress && !canonicalAddress && !bridgedAddress) {
+    fetchTokenAddresses();
+  }
   $: imageUrl = token?.metadata?.image || placeholderUrl;
 
   $: isERC721 = selectedItem?.tokenType === TokenType.ERC721;
@@ -119,7 +121,7 @@
           <li class="f-between-center">
             <h4 class="text-secondary-content">
               <div class="f-items-center space-x-1">
-                <button on:click={openToolTip}>
+                <button on:click|stopPropagation={openToolTip}>
                   <span>{$t('transactions.header.status')}</span>
                 </button>
                 <button on:click={handleStatusDialog} class="flex justify-start content-center">
@@ -128,7 +130,11 @@
               </div>
             </h4>
             <div class="f-items-center space-x-1">
-              <Status bridgeTx={selectedItem} on:insufficientFunds={handleInsufficientFunds} />
+              <Status
+                bridgeTxStatus={selectedItem.status}
+                bridgeTx={selectedItem}
+                on:openModal={forwardEvent}
+                on:insufficientFunds={handleInsufficientFunds} />
             </div>
           </li>
 

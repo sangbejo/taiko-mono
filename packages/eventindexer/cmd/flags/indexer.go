@@ -37,13 +37,6 @@ var (
 		Category: indexerCategory,
 		EnvVars:  []string{"BRIDGE_ADDRESS"},
 	}
-	SwapAddresses = &cli.StringFlag{
-		Name:     "swapAddresses",
-		Usage:    "Comma-delinated list of Swap contract addresses",
-		Required: false,
-		Category: indexerCategory,
-		EnvVars:  []string{"SWAP_ADDRESSES"},
-	}
 	AssignmentHookAddress = &cli.StringFlag{
 		Name:     "assignmentHookAddress",
 		Usage:    "Address of the AssignmentHook contract",
@@ -89,7 +82,6 @@ var IndexerFlags = MergeFlags(CommonFlags, []cli.Flag{
 	ETHClientTimeout,
 	L1TaikoAddress,
 	BridgeAddress,
-	SwapAddresses,
 	AssignmentHookAddress,
 	BlockBatchSize,
 	SubscriptionBackoff,

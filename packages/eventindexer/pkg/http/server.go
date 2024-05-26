@@ -14,7 +14,7 @@ import (
 	echo "github.com/labstack/echo/v4"
 )
 
-// @title Taiko Eventindexer API
+// @title Taiko Event Indexer API
 // @version 1.0
 // @termsOfService http://swagger.io/terms/
 
@@ -23,13 +23,13 @@ import (
 // @contact.email info@taiko.xyz
 
 // @license.name MIT
+// @license.url https://github.com/taikoxyz/taiko-mono/blob/main/LICENSE.md
 
-// @host eventindexer.katla.taiko.xyz
+// @host eventindexer.hekla.taiko.xyz
 // Server represents an eventindexer http server instance.
 type Server struct {
 	echo           *echo.Echo
 	eventRepo      eventindexer.EventRepository
-	statRepo       eventindexer.StatRepository
 	nftBalanceRepo eventindexer.NFTBalanceRepository
 	chartRepo      eventindexer.ChartRepository
 	cache          *cache.Cache
@@ -38,7 +38,6 @@ type Server struct {
 type NewServerOpts struct {
 	Echo           *echo.Echo
 	EventRepo      eventindexer.EventRepository
-	StatRepo       eventindexer.StatRepository
 	NFTBalanceRepo eventindexer.NFTBalanceRepository
 	ChartRepo      eventindexer.ChartRepository
 	EthClient      *ethclient.Client
@@ -52,10 +51,6 @@ func (opts NewServerOpts) Validate() error {
 
 	if opts.EventRepo == nil {
 		return eventindexer.ErrNoEventRepository
-	}
-
-	if opts.StatRepo == nil {
-		return eventindexer.ErrNoStatRepository
 	}
 
 	if opts.CorsOrigins == nil {
@@ -79,7 +74,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	srv := &Server{
 		echo:           opts.Echo,
 		eventRepo:      opts.EventRepo,
-		statRepo:       opts.StatRepo,
 		nftBalanceRepo: opts.NFTBalanceRepo,
 		chartRepo:      opts.ChartRepo,
 		cache:          cache,

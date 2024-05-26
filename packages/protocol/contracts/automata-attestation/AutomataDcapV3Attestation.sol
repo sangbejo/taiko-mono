@@ -17,13 +17,12 @@ import { BytesUtils } from "./utils/BytesUtils.sol";
 // External Libraries
 import { ISigVerifyLib } from "./interfaces/ISigVerifyLib.sol";
 
+import { EssentialContract } from "../common/EssentialContract.sol";
+
 /// @title AutomataDcapV3Attestation
 /// @custom:security-contact security@taiko.xyz
-contract AutomataDcapV3Attestation is IAttestation {
+contract AutomataDcapV3Attestation is IAttestation, EssentialContract {
     using BytesUtils for bytes;
-
-    ISigVerifyLib public immutable sigVerifyLib;
-    IPEMCertChainLib public immutable pemCertLib;
 
     // https://github.com/intel/SGXDataCenterAttestationPrimitives/blob/e7604e02331b3377f3766ed3653250e03af72d45/QuoteVerification/QVL/Src/AttestationLibrary/src/CertVerification/X509Constants.h#L64
     uint256 internal constant CPUSVN_LENGTH = 16;
@@ -35,39 +34,58 @@ contract AutomataDcapV3Attestation is IAttestation {
 
     uint8 internal constant INVALID_EXIT_CODE = 255;
 
-    bool private _checkLocalEnclaveReport;
-    mapping(bytes32 enclave => bool trusted) private _trustedUserMrEnclave;
-    mapping(bytes32 signer => bool trusted) private _trustedUserMrSigner;
+    ISigVerifyLib public sigVerifyLib; // slot 1
+    IPEMCertChainLib public pemCertLib; // slot 2
+
+    bool public checkLocalEnclaveReport; // slot 3
+    mapping(bytes32 enclave => bool trusted) public trustedUserMrEnclave; // slot 4
+    mapping(bytes32 signer => bool trusted) public trustedUserMrSigner; // slot 5
 
     // Quote Collateral Configuration
 
     // Index definition:
     // 0 = Quote PCKCrl
     // 1 = RootCrl
-    mapping(uint256 idx => mapping(bytes serialNum => bool revoked)) private _serialNumIsRevoked;
+    mapping(uint256 idx => mapping(bytes serialNum => bool revoked)) public serialNumIsRevoked; // slot
+        // 6
     // fmspc => tcbInfo
-    mapping(string fmspc => TCBInfoStruct.TCBInfo tcbInfo) public tcbInfo;
-    EnclaveIdStruct.EnclaveId public qeIdentity;
+    mapping(string fmspc => TCBInfoStruct.TCBInfo tcbInfo) public tcbInfo; // slot 7
+    EnclaveIdStruct.EnclaveId public qeIdentity; // takes 4 slots, slot 8,9,10,11
 
-    address public owner;
+    uint256[39] __gap;
 
-    constructor(address sigVerifyLibAddr, address pemCertLibAddr) {
+    event MrSignerUpdated(bytes32 indexed mrSigner, bool trusted);
+    event MrEnclaveUpdated(bytes32 indexed mrEnclave, bool trusted);
+    event TcbInfoJsonConfigured(string indexed fmspc, TCBInfoStruct.TCBInfo tcbInfoInput);
+    event QeIdentityConfigured(EnclaveIdStruct.EnclaveId qeIdentityInput);
+    event LocalReportCheckToggled(bool checkLocalEnclaveReport);
+    event RevokedCertSerialNumAdded(uint256 indexed index, bytes serialNum);
+    event RevokedCertSerialNumRemoved(uint256 indexed index, bytes serialNum);
+
+    // @notice Initializes the contract.
+    /// @param sigVerifyLibAddr Address of the signature verification library.
+    /// @param pemCertLibAddr Address of certificate library.
+    function init(
+        address owner,
+        address sigVerifyLibAddr,
+        address pemCertLibAddr
+    )
+        external
+        initializer
+    {
+        __Essential_init(owner);
         sigVerifyLib = ISigVerifyLib(sigVerifyLibAddr);
         pemCertLib = PEMCertChainLib(pemCertLibAddr);
-        owner = msg.sender;
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "onlyOwner");
-        _;
     }
 
     function setMrSigner(bytes32 _mrSigner, bool _trusted) external onlyOwner {
-        _trustedUserMrSigner[_mrSigner] = _trusted;
+        trustedUserMrSigner[_mrSigner] = _trusted;
+        emit MrSignerUpdated(_mrSigner, _trusted);
     }
 
     function setMrEnclave(bytes32 _mrEnclave, bool _trusted) external onlyOwner {
-        _trustedUserMrEnclave[_mrEnclave] = _trusted;
+        trustedUserMrEnclave[_mrEnclave] = _trusted;
+        emit MrEnclaveUpdated(_mrEnclave, _trusted);
     }
 
     function addRevokedCertSerialNum(
@@ -78,10 +96,11 @@ contract AutomataDcapV3Attestation is IAttestation {
         onlyOwner
     {
         for (uint256 i; i < serialNumBatch.length; ++i) {
-            if (_serialNumIsRevoked[index][serialNumBatch[i]]) {
+            if (serialNumIsRevoked[index][serialNumBatch[i]]) {
                 continue;
             }
-            _serialNumIsRevoked[index][serialNumBatch[i]] = true;
+            serialNumIsRevoked[index][serialNumBatch[i]] = true;
+            emit RevokedCertSerialNumAdded(index, serialNumBatch[i]);
         }
     }
 
@@ -93,10 +112,11 @@ contract AutomataDcapV3Attestation is IAttestation {
         onlyOwner
     {
         for (uint256 i; i < serialNumBatch.length; ++i) {
-            if (!_serialNumIsRevoked[index][serialNumBatch[i]]) {
+            if (!serialNumIsRevoked[index][serialNumBatch[i]]) {
                 continue;
             }
-            delete _serialNumIsRevoked[index][serialNumBatch[i]];
+            delete serialNumIsRevoked[index][serialNumBatch[i]];
+            emit RevokedCertSerialNumRemoved(index, serialNumBatch[i]);
         }
     }
 
@@ -109,6 +129,7 @@ contract AutomataDcapV3Attestation is IAttestation {
     {
         // 2.2M gas
         tcbInfo[fmspc] = tcbInfoInput;
+        emit TcbInfoJsonConfigured(fmspc, tcbInfoInput);
     }
 
     function configureQeIdentityJson(EnclaveIdStruct.EnclaveId calldata qeIdentityInput)
@@ -117,10 +138,12 @@ contract AutomataDcapV3Attestation is IAttestation {
     {
         // 250k gas
         qeIdentity = qeIdentityInput;
+        emit QeIdentityConfigured(qeIdentityInput);
     }
 
     function toggleLocalReportCheck() external onlyOwner {
-        _checkLocalEnclaveReport = !_checkLocalEnclaveReport;
+        checkLocalEnclaveReport = !checkLocalEnclaveReport;
+        emit LocalReportCheckToggled(checkLocalEnclaveReport);
     }
 
     function _attestationTcbIsValid(TCBInfoStruct.TCBStatus status)
@@ -132,12 +155,12 @@ contract AutomataDcapV3Attestation is IAttestation {
         return status == TCBInfoStruct.TCBStatus.OK
             || status == TCBInfoStruct.TCBStatus.TCB_SW_HARDENING_NEEDED
             || status == TCBInfoStruct.TCBStatus.TCB_CONFIGURATION_AND_SW_HARDENING_NEEDED
+            || status == TCBInfoStruct.TCBStatus.TCB_OUT_OF_DATE
             || status == TCBInfoStruct.TCBStatus.TCB_OUT_OF_DATE_CONFIGURATION_NEEDED;
     }
 
-    function verifyAttestation(bytes calldata data) external view override returns (bool) {
-        (bool success,) = _verify(data);
-        return success;
+    function verifyAttestation(bytes calldata data) external view override returns (bool success) {
+        (success,) = _verify(data);
     }
 
     /// @dev Provide the raw quote binary as input
@@ -265,11 +288,11 @@ contract AutomataDcapV3Attestation is IAttestation {
                 issuer = certs[i + 1];
                 if (i == n - 2) {
                     // this cert is expected to be signed by the root
-                    certRevoked = _serialNumIsRevoked[uint256(IPEMCertChainLib.CRL.ROOT)][certs[i]
+                    certRevoked = serialNumIsRevoked[uint256(IPEMCertChainLib.CRL.ROOT)][certs[i]
                         .serialNumber];
                 } else if (certs[i].isPck) {
-                    certRevoked = _serialNumIsRevoked[uint256(IPEMCertChainLib.CRL.PCK)][certs[i]
-                        .serialNumber];
+                    certRevoked =
+                        serialNumIsRevoked[uint256(IPEMCertChainLib.CRL.PCK)][certs[i].serialNumber];
                 }
                 if (certRevoked) {
                     break;
@@ -382,11 +405,10 @@ contract AutomataDcapV3Attestation is IAttestation {
 
         // Step 2: Verify application enclave report MRENCLAVE and MRSIGNER
         {
-            if (_checkLocalEnclaveReport) {
+            if (checkLocalEnclaveReport) {
                 // 4k gas
-                bool mrEnclaveIsTrusted =
-                    _trustedUserMrEnclave[v3quote.localEnclaveReport.mrEnclave];
-                bool mrSignerIsTrusted = _trustedUserMrSigner[v3quote.localEnclaveReport.mrSigner];
+                bool mrEnclaveIsTrusted = trustedUserMrEnclave[v3quote.localEnclaveReport.mrEnclave];
+                bool mrSignerIsTrusted = trustedUserMrSigner[v3quote.localEnclaveReport.mrSigner];
 
                 if (!mrEnclaveIsTrusted || !mrSignerIsTrusted) {
                     return (false, retData);

@@ -2,7 +2,6 @@
 pragma solidity 0.8.24;
 
 import "../common/EssentialContract.sol";
-import "./libs/LibDepositing.sol";
 import "./libs/LibProposing.sol";
 import "./libs/LibProving.sol";
 import "./libs/LibVerifying.sol";
@@ -35,25 +34,40 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         LibVerifying.emitEventForClient(state);
     }
 
-    /// @dev Fallback function to receive Ether from Hooks
+    /// @dev Allows for receiving Ether from Hooks
     receive() external payable {
-        if (!_inNonReentrant()) revert L1_RECEIVE_DISABLED();
+        if (!inNonReentrant()) revert L1_RECEIVE_DISABLED();
     }
 
     /// @notice Initializes the contract.
     /// @param _owner The owner of this contract. msg.sender will be used if this value is zero.
     /// @param _addressManager The address of the {AddressManager} contract.
     /// @param _genesisBlockHash The block hash of the genesis block.
+    /// @param _toPause true to pause the contract by default.
     function init(
         address _owner,
         address _addressManager,
-        bytes32 _genesisBlockHash
+        bytes32 _genesisBlockHash,
+        bool _toPause
     )
         external
         initializer
     {
         __Essential_init(_owner, _addressManager);
         LibVerifying.init(state, getConfig(), _genesisBlockHash);
+        if (_toPause) _pause();
+    }
+
+    function init2() external onlyOwner reinitializer(2) {
+        // reset some previously used slots for future reuse
+        state.slotB.__reservedB1 = 0;
+        state.slotB.__reservedB2 = 0;
+        state.slotB.__reservedB3 = 0;
+        state.__reserve1 = 0;
+    }
+
+    function resetGenesisHash(bytes32 _genesisBlockHash) external onlyOwner {
+        LibVerifying.resetGenesisHash(state, _genesisBlockHash);
     }
 
     /// @inheritdoc ITaikoL1
@@ -63,14 +77,15 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
     )
         external
         payable
-        nonReentrant
         whenNotPaused
+        nonReentrant
         emitEventForClient
         returns (TaikoData.BlockMetadata memory meta_, TaikoData.EthDeposit[] memory deposits_)
     {
         TaikoData.Config memory config = getConfig();
-
-        (meta_, deposits_) = LibProposing.proposeBlock(state, config, this, _params, _txList);
+        (meta_, deposits_) = LibProposing.proposeBlock(
+            state, config, this, _params, _txList, _checkEOAForCalldataDA()
+        );
 
         if (!state.slotB.provingPaused) {
             LibVerifying.verifyBlocks(state, config, this, config.maxBlocksToVerifyPerProposal);
@@ -83,9 +98,9 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         bytes calldata _input
     )
         external
-        nonReentrant
         whenNotPaused
         whenProvingNotPaused
+        nonReentrant
         emitEventForClient
     {
         (
@@ -106,26 +121,18 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
     /// @inheritdoc ITaikoL1
     function verifyBlocks(uint64 _maxBlocksToVerify)
         external
-        nonReentrant
         whenNotPaused
         whenProvingNotPaused
+        nonReentrant
         emitEventForClient
     {
         LibVerifying.verifyBlocks(state, getConfig(), this, _maxBlocksToVerify);
     }
 
-    /// @notice Pause block proving.
-    /// @param _pause True if paused.
+    /// @inheritdoc ITaikoL1
     function pauseProving(bool _pause) external {
         _authorizePause(msg.sender, _pause);
         LibProving.pauseProving(state, _pause);
-    }
-
-    /// @notice Deposits Ether to Layer 2.
-    /// @param _recipient Address of the recipient for the deposited Ether on
-    /// Layer 2.
-    function depositEtherToL2(address _recipient) external payable nonReentrant whenNotPaused {
-        LibDepositing.depositEtherToL2(state, getConfig(), this, _recipient);
     }
 
     /// @inheritdoc EssentialContract
@@ -134,28 +141,11 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         state.slotB.lastUnpausedAt = uint64(block.timestamp);
     }
 
-    /// @notice Checks if Ether deposit is allowed for Layer 2.
-    /// @param _amount Amount of Ether to be deposited.
-    /// @return true if Ether deposit is allowed, false otherwise.
-    function canDepositEthToL2(uint256 _amount) public view returns (bool) {
-        return LibDepositing.canDepositEthToL2(state, getConfig(), _amount);
-    }
-
     /// @notice Gets the details of a block.
     /// @param _blockId Index of the block.
     /// @return blk_ The block.
-    /// @return ts_ The transition used to verify this block.
-    function getBlock(uint64 _blockId)
-        public
-        view
-        returns (TaikoData.Block memory blk_, TaikoData.TransitionState memory ts_)
-    {
-        uint64 slot;
-        (blk_, slot) = LibUtils.getBlock(state, getConfig(), _blockId);
-
-        if (blk_.verifiedTransitionId != 0) {
-            ts_ = state.transitions[slot][blk_.verifiedTransitionId];
-        }
+    function getBlock(uint64 _blockId) public view returns (TaikoData.Block memory blk_) {
+        (blk_,) = LibUtils.getBlock(state, getConfig(), _blockId);
     }
 
     /// @notice Gets the state transition for a specific block.
@@ -173,16 +163,43 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         return LibUtils.getTransition(state, getConfig(), _blockId, _parentHash);
     }
 
+    /// @notice Gets the state transition for a specific block.
+    /// @param _blockId Index of the block.
+    /// @param _tid The transition id.
+    /// @return The state transition data of the block.
+    function getTransition(
+        uint64 _blockId,
+        uint32 _tid
+    )
+        public
+        view
+        returns (TaikoData.TransitionState memory)
+    {
+        return LibUtils.getTransition(state, getConfig(), _blockId, _tid);
+    }
     /// @notice Gets the state variables of the TaikoL1 contract.
-    /// @return a_ State variables stored at SlotA.
-    /// @return b_ State variables stored at SlotB.
+    /// @dev This method can be deleted once node/client stops using it.
+    /// @return State variables stored at SlotA.
+    /// @return State variables stored at SlotB.
+
     function getStateVariables()
         public
         view
-        returns (TaikoData.SlotA memory a_, TaikoData.SlotB memory b_)
+        returns (TaikoData.SlotA memory, TaikoData.SlotB memory)
     {
-        a_ = state.slotA;
-        b_ = state.slotB;
+        return (state.slotA, state.slotB);
+    }
+
+    /// @notice Gets SlotA
+    /// @return  State variables stored at SlotA.
+    function slotA() public view returns (TaikoData.SlotA memory) {
+        return state.slotA;
+    }
+
+    /// @notice Gets SlotB
+    /// @return  State variables stored at SlotB.
+    function slotB() public view returns (TaikoData.SlotB memory) {
+        return state.slotB;
     }
 
     /// @inheritdoc ITaikoL1
@@ -192,7 +209,7 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         // - anchorGasLimit: 250_000 (based on internal devnet, its ~220_000
         // after 256 L2 blocks)
         return TaikoData.Config({
-            chainId: 167_009,
+            chainId: LibNetwork.TAIKO,
             // Assume the block time is 3s, the protocol will allow ~90 days of
             // new blocks without any verification.
             blockMaxProposals: 3_000_000,
@@ -202,16 +219,8 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
             // This value is set based on `gasTargetPerL1Block = 15_000_000 * 4` in TaikoL2.
             // We use 8x rather than 4x here to handle the scenario where the average number of
             // Taiko blocks proposed per Ethereum block is smaller than 1.
-            blockMaxGasLimit: 30_000_000 * 8,
+            blockMaxGasLimit: 240_000_000,
             livenessBond: 250e18, // 250 Taiko token
-            // ETH deposit related.
-            ethDepositRingBufferSize: 1024,
-            ethDepositMinCountPerBlock: 8,
-            ethDepositMaxCountPerBlock: 32,
-            ethDepositMinAmount: 1 ether,
-            ethDepositMaxAmount: 10_000 ether,
-            ethDepositGas: 21_000,
-            ethDepositMaxFee: 1 ether / 10,
             blockSyncThreshold: 16
         });
     }
@@ -225,6 +234,10 @@ contract TaikoL1 is EssentialContract, ITaikoL1, TaikoEvents, TaikoErrors {
         view
         virtual
         override
-        onlyFromOwnerOrNamed("chain_pauser")
+        onlyFromOwnerOrNamed(LibStrings.B_CHAIN_WATCHDOG)
     { }
+
+    function _checkEOAForCalldataDA() internal pure virtual returns (bool) {
+        return true;
+    }
 }

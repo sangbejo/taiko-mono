@@ -2,7 +2,6 @@
 pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/utils/Address.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 
@@ -10,8 +9,6 @@ import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 /// @dev Provides utilities for address-related operations.
 /// @custom:security-contact security@taiko.xyz
 library LibAddress {
-    bytes4 private constant _EIP1271_MAGICVALUE = 0x1626ba7e;
-
     error ETH_TRANSFER_FAILED();
 
     /// @dev Sends Ether to the specified address. This method will not revert even if sending ether
@@ -82,21 +79,5 @@ library LibAddress {
         try IERC165(_addr).supportsInterface(_interfaceId) returns (bool _result) {
             result_ = _result;
         } catch { }
-    }
-
-    function isValidSignature(
-        address _addr,
-        bytes32 _hash,
-        bytes memory _sig
-    )
-        internal
-        view
-        returns (bool)
-    {
-        if (Address.isContract(_addr)) {
-            return IERC1271(_addr).isValidSignature(_hash, _sig) == _EIP1271_MAGICVALUE;
-        } else {
-            return ECDSA.recover(_hash, _sig) == _addr;
-        }
     }
 }

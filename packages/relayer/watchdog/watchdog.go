@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +14,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cyberhorsey/errors"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -29,6 +30,7 @@ import (
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/encoding"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/queue"
 	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/repo"
+	"github.com/taikoxyz/taiko-mono/packages/relayer/pkg/utils"
 )
 
 type DB interface {
@@ -46,13 +48,13 @@ type ethClient interface {
 	SuggestGasPrice(ctx context.Context) (*big.Int, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	ChainID(ctx context.Context) (*big.Int, error)
+	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
 }
 
 type Watchdog struct {
 	cancel context.CancelFunc
 
-	eventRepo       relayer.EventRepository
-	suspendedTxRepo relayer.SuspendedTransactionRepository
+	eventRepo relayer.EventRepository
 
 	queue queue.Queue
 
@@ -83,7 +85,8 @@ type Watchdog struct {
 	srcChainId  *big.Int
 	destChainId *big.Int
 
-	txmgr txmgr.TxManager
+	srcTxmgr  txmgr.TxManager
+	destTxmgr txmgr.TxManager
 
 	cfg *Config
 }
@@ -105,11 +108,6 @@ func InitFromConfig(ctx context.Context, w *Watchdog, cfg *Config) error {
 	}
 
 	eventRepository, err := repo.NewEventRepository(db)
-	if err != nil {
-		return err
-	}
-
-	suspendedTxRepo, err := repo.NewSuspendedTransactionRepository(db)
 	if err != nil {
 		return err
 	}
@@ -158,17 +156,25 @@ func InitFromConfig(ctx context.Context, w *Watchdog, cfg *Config) error {
 		return err
 	}
 
-	if w.txmgr, err = txmgr.NewSimpleTxManager(
+	if w.srcTxmgr, err = txmgr.NewSimpleTxManager(
 		"watchdog",
 		log.Root(),
 		new(txmgrMetrics.NoopTxMetrics),
-		*cfg.TxmgrConfigs,
+		*cfg.SrcTxmgrConfigs,
+	); err != nil {
+		return err
+	}
+
+	if w.destTxmgr, err = txmgr.NewSimpleTxManager(
+		"watchdog",
+		log.Root(),
+		new(txmgrMetrics.NoopTxMetrics),
+		*cfg.DestTxmgrConfigs,
 	); err != nil {
 		return err
 	}
 
 	w.eventRepo = eventRepository
-	w.suspendedTxRepo = suspendedTxRepo
 
 	w.srcEthClient = srcEthClient
 	w.destEthClient = destEthClient
@@ -239,11 +245,19 @@ func (w *Watchdog) Start() error {
 
 	go w.eventLoop(ctx)
 
+	go func() {
+		if err := backoff.Retry(func() error {
+			return utils.ScanBlocks(ctx, w.srcEthClient, w.wg)
+		}, backoff.NewConstantBackOff(5*time.Second)); err != nil {
+			slog.Error("scan blocks backoff retry", "error", err)
+		}
+	}()
+
 	return nil
 }
 
 func (w *Watchdog) queueName() string {
-	return fmt.Sprintf("%v-%v-%v-queue", w.srcChainId.String(), w.destChainId.String(), relayer.EventNameMessageReceived)
+	return fmt.Sprintf("%v-%v-%v-queue", w.srcChainId.String(), w.destChainId.String(), relayer.EventNameMessageProcessed)
 }
 
 func (w *Watchdog) eventLoop(ctx context.Context) {
@@ -279,13 +293,18 @@ func (w *Watchdog) eventLoop(ctx context.Context) {
 // that the message was actually sent on the source chain. If it wasn't,
 // we send a suspend transaction.
 func (w *Watchdog) checkMessage(ctx context.Context, msg queue.Message) error {
-	msgBody := &queue.QueueMessageReceivedBody{}
+	msgBody := &queue.QueueMessageProcessedBody{}
 	if err := json.Unmarshal(msg.Body, msgBody); err != nil {
 		return errors.Wrap(err, "json.Unmarshal")
 	}
 
-	// check if the source chain sent this message
-	sent, err := w.destBridge.IsMessageSent(nil, msgBody.Event.Message)
+	// check if the source chain sent this message.
+	// source chain will be `destBridge`, because this indexer
+	// responds to `MessageProcessed` events. to the source chain
+	// of the `MessageProcessed` event, is the destination chain
+	// of the actual message itself. So the `destBridge` is the bridge
+	// which should have sent the message originally.
+	sent, err := w.destBridge.IsMessageSent(nil, msgBody.Message)
 	if err != nil {
 		return errors.Wrap(err, "w.destBridge.IsMessageSent")
 	}
@@ -293,68 +312,83 @@ func (w *Watchdog) checkMessage(ctx context.Context, msg queue.Message) error {
 	// if so, do nothing, acknowledge message
 	if sent {
 		slog.Info("dest bridge did send this message. returning early",
-			"msgHash", common.BytesToHash(msgBody.Event.MsgHash[:]).Hex(),
 			"sent", sent,
 		)
 
 		return nil
 	}
 
-	receipt, err := w.suspendMessage(ctx, msgBody.Event.MsgHash)
+	slog.Warn("dest bridge did not send this message", "msgId", msgBody.Message.Id)
+
+	// we should alert based on this metric
+	relayer.BridgeMessageNotSent.Inc()
+
+	pauseReceipt, err := w.pauseBridge(ctx, w.srcBridge, w.cfg.SrcBridgeAddress, w.srcTxmgr)
 	if err != nil {
 		return err
 	}
 
-	slog.Info("Mined suspend tx", "txHash", hex.EncodeToString(receipt.TxHash.Bytes()))
+	if pauseReceipt != nil {
+		slog.Info("Mined pause tx",
+			"txHash", pauseReceipt.TxHash.Hex(),
+			"bridgeAddress", w.cfg.SrcBridgeAddress.Hex(),
+		)
 
-	relayer.TransactionsSuspended.Inc()
+		if pauseReceipt.Status != types.ReceiptStatusSuccessful {
+			slog.Error("Error pausing bridge", "bridgeAddress", w.cfg.SrcBridgeAddress)
 
-	pauseReceipt, err := w.pauseBridge(ctx)
-	if err != nil {
-		return err
+			relayer.BridgePausedErrors.Inc()
+
+			return err
+		}
 	}
-
-	slog.Info("Mined pause tx", "txHash", hex.EncodeToString(pauseReceipt.TxHash.Bytes()))
 
 	relayer.BridgePaused.Inc()
 
-	if _, err := w.suspendedTxRepo.Save(ctx,
-		relayer.SuspendTransactionOpts{
-			MessageID:    int(msgBody.Event.Message.Id.Int64()),
-			SrcChainID:   int(msgBody.Event.Message.SrcChainId),
-			DestChainID:  int(msgBody.Event.Message.DestChainId),
-			MessageOwner: msgBody.Event.Message.From.Hex(),
-			Suspended:    true,
-			MsgHash:      common.BytesToHash(msgBody.Event.MsgHash[:]).Hex(),
-		}); err != nil {
-		return errors.Wrap(err, "w.suspendedTxRepo.Save")
+	pauseReceipt, err = w.pauseBridge(ctx, w.destBridge, w.cfg.DestBridgeAddress, w.destTxmgr)
+	if err != nil {
+		return err
 	}
+
+	if pauseReceipt != nil {
+		slog.Info("Mined pause tx",
+			"txHash", pauseReceipt.TxHash.Hex(),
+			"bridgeAddress", w.cfg.DestBridgeAddress.Hex(),
+		)
+
+		if pauseReceipt.Status != types.ReceiptStatusSuccessful {
+			slog.Error("Error pausing bridge", "bridgeAddress", w.cfg.DestBridgeAddress)
+
+			relayer.BridgePausedErrors.Inc()
+
+			return err
+		}
+	}
+
+	relayer.BridgePaused.Inc()
 
 	return nil
 }
 
-func (w *Watchdog) suspendMessage(ctx context.Context, msgHash [32]byte) (*types.Receipt, error) {
-	data, err := encoding.BridgeABI.Pack("suspendMessages", [][32]byte{msgHash}, true)
+func (w *Watchdog) pauseBridge(
+	ctx context.Context,
+	bridge relayer.Bridge,
+	bridgeAddress common.Address,
+	mgr txmgr.TxManager,
+) (*types.Receipt, error) {
+	paused, err := bridge.Paused(&bind.CallOpts{
+		Context: ctx,
+	})
 	if err != nil {
-		return nil, errors.Wrap(err, "encoding.BridgeABI.Pack")
-	}
-
-	candidate := txmgr.TxCandidate{
-		TxData: data,
-		Blobs:  nil,
-		To:     &w.cfg.SrcBridgeAddress,
-	}
-
-	receipt, err := w.txmgr.Send(ctx, candidate)
-	if err != nil {
-		slog.Warn("Failed to send SuspendMessage transaction", "error", err.Error())
 		return nil, err
 	}
 
-	return receipt, nil
-}
+	if paused {
+		slog.Info("bridge already paused")
 
-func (w *Watchdog) pauseBridge(ctx context.Context) (*types.Receipt, error) {
+		return nil, nil
+	}
+
 	data, err := encoding.BridgeABI.Pack("pause")
 	if err != nil {
 		return nil, errors.Wrap(err, "encoding.BridgeABI.Pack")
@@ -364,10 +398,10 @@ func (w *Watchdog) pauseBridge(ctx context.Context) (*types.Receipt, error) {
 	candidate := txmgr.TxCandidate{
 		TxData: data,
 		Blobs:  nil,
-		To:     &w.cfg.SrcBridgeAddress,
+		To:     &bridgeAddress,
 	}
 
-	receipt, err := w.txmgr.Send(ctx, candidate)
+	receipt, err := mgr.Send(ctx, candidate)
 	if err != nil {
 		slog.Warn("Failed to send pause transaction", "error", err.Error())
 		return nil, err

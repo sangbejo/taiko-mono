@@ -2,15 +2,10 @@
 pragma solidity 0.8.24;
 
 import "forge-std/src/Test.sol";
-import "forge-std/src/console2.sol";
 
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
-import "../contracts/thirdparty/solmate/LibFixedPointMath.sol";
-
-import "../contracts/bridge/Bridge.sol";
-import "../contracts/signal/SignalService.sol";
 import "../contracts/tokenvault/BridgedERC20.sol";
 import "../contracts/tokenvault/BridgedERC721.sol";
 import "../contracts/tokenvault/BridgedERC1155.sol";
@@ -18,26 +13,18 @@ import "../contracts/tokenvault/ERC20Vault.sol";
 import "../contracts/tokenvault/ERC721Vault.sol";
 import "../contracts/tokenvault/ERC1155Vault.sol";
 
-import "../contracts/L1/TaikoToken.sol";
+import "../contracts/tko/TaikoToken.sol";
 import "../contracts/L1/TaikoL1.sol";
-import "../contracts/verifiers/libs/LibPublicInput.sol";
 import "../contracts/verifiers/SgxVerifier.sol";
 import "../contracts/verifiers/RiscZeroVerifier.sol";
-import "../contracts/verifiers/GuardianVerifier.sol";
-import "../contracts/L1/tiers/TierProviderV1.sol";
-import "../contracts/L1/tiers/ITierProvider.sol";
-import "../contracts/L1/tiers/ITierProvider.sol";
+import "../test/L1/TestTierProvider.sol";
 import "../contracts/L1/hooks/AssignmentHook.sol";
 import "../contracts/L1/provers/GuardianProver.sol";
+import "../contracts/bridge/QuotaManager.sol";
 
-import "../contracts/L2/Lib1559Math.sol";
-import "../contracts/L2/TaikoL2.sol";
 import "../contracts/L2/DelegateOwner.sol";
 
-import "../contracts/team/TimelockTokenPool.sol";
 import "../contracts/team/airdrop/ERC20Airdrop.sol";
-import "../contracts/team/airdrop/ERC20Airdrop2.sol";
-import "../contracts/team/airdrop/ERC721Airdrop.sol";
 
 import "../test/common/erc20/FreeMintERC20.sol";
 import "../test/L2/TaikoL2EIP1559Configurable.sol";

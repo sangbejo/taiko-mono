@@ -3,8 +3,6 @@ package tasks
 var (
 	TotalTransactions               = "total-transactions"
 	TransactionsPerDay              = "transactions-per-day"
-	TotalBlocks                     = "total-blocks"
-	BlocksPerDay                    = "blocks-per-day"
 	TotalAccounts                   = "total-accounts"
 	AccountsPerDay                  = "accounts-per-day"
 	UniqueProposersPerDay           = "unique-proposers-per-day"
@@ -21,8 +19,6 @@ var (
 	TotalProposeBlockTx             = "total-propose-block-tx"
 	BridgeMessagesSentPerDay        = "bridge-messages-sent-per-day"
 	TotalBridgeMessagesSent         = "total-bridge-messages-sent"
-	TotalProofRewards               = "total-proof-rewards"
-	ProofRewardsPerDay              = "proof-rewards-per-day"
 	TransitionProvedByTierPerDay    = "transition-proved-by-tier-per-day"
 	TransitionContestedByTierPerDay = "transition-contested-by-tier-per-day"
 	TotalTransitionProvedByTier     = "total-transition-proved-by-tier"
@@ -32,8 +28,6 @@ var (
 var Tasks = []string{
 	TotalTransactions,
 	TransactionsPerDay,
-	TotalBlocks,
-	BlocksPerDay,
 	TotalAccounts,
 	AccountsPerDay,
 	UniqueProposersPerDay,
@@ -50,8 +44,6 @@ var Tasks = []string{
 	TotalProposeBlockTx,
 	BridgeMessagesSentPerDay,
 	TotalBridgeMessagesSent,
-	TotalProofRewards,
-	ProofRewardsPerDay,
 	TotalTransitionProvedByTier,
 	TotalTransitionContestedByTier,
 	TransitionProvedByTierPerDay,

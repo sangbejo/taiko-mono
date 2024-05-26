@@ -19,38 +19,18 @@ abstract contract BaseNFTVault is BaseVault {
         string name;
     }
 
-    // Struct representing the details of a bridged token transfer operation.
+    /// @devStruct representing the details of a bridged token transfer operation.
+    /// 5 slots
     struct BridgeTransferOp {
-        // Destination chain ID.
         uint64 destChainId;
-        // The owner of the bridge message on the destination chain.
         address destOwner;
-        // Recipient address.
         address to;
-        // Address of the token.
+        uint64 fee;
         address token;
-        // IDs of the tokens to transfer.
+        uint32 gasLimit;
         uint256[] tokenIds;
-        // Amounts of tokens to transfer.
         uint256[] amounts;
-        // Gas limit for the operation.
-        uint256 gasLimit;
-        // Processing fee for the relayer.
-        uint256 fee;
-        // Address for refund, if needed.
-        address refundTo;
-        // Optional memo.
-        string memo;
     }
-
-    /// @notice ERC1155 interface ID.
-    bytes4 public constant ERC1155_INTERFACE_ID = 0xd9b67a26;
-
-    /// @notice ERC721 interface ID.
-    bytes4 public constant ERC721_INTERFACE_ID = 0x80ac58cd;
-
-    /// @notice Maximum number of tokens that can be transferred per transaction.
-    uint256 public constant MAX_TOKEN_PER_TXN = 10;
 
     /// @notice Mapping to store bridged NFTs and their canonical counterparts.
     mapping(address btoken => CanonicalNFT canonical) public bridgedToCanonical;
@@ -132,18 +112,12 @@ abstract contract BaseNFTVault is BaseVault {
 
     error VAULT_INVALID_TOKEN();
     error VAULT_INVALID_AMOUNT();
-    error VAULT_INVALID_TO();
     error VAULT_INTERFACE_NOT_SUPPORTED();
     error VAULT_TOKEN_ARRAY_MISMATCH();
-    error VAULT_MAX_TOKEN_PER_TXN_EXCEEDED();
 
     modifier withValidOperation(BridgeTransferOp memory _op) {
         if (_op.tokenIds.length != _op.amounts.length) {
             revert VAULT_TOKEN_ARRAY_MISMATCH();
-        }
-
-        if (_op.tokenIds.length > MAX_TOKEN_PER_TXN) {
-            revert VAULT_MAX_TOKEN_PER_TXN_EXCEEDED();
         }
 
         if (_op.token == address(0)) revert VAULT_INVALID_TOKEN();

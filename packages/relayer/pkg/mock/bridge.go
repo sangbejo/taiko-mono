@@ -42,43 +42,18 @@ func (b *Bridge) IsMessageSent(opts *bind.CallOpts, _message bridge.IBridgeMessa
 	return false, nil
 }
 
-func (b *Bridge) GetInvocationDelays(opts *bind.CallOpts) (struct {
-	InvocationDelay      *big.Int
-	InvocationExtraDelay *big.Int
-}, error) {
-	return struct {
-		InvocationDelay      *big.Int
-		InvocationExtraDelay *big.Int
-	}{
-		InvocationDelay:      common.Big0,
-		InvocationExtraDelay: common.Big0,
-	}, nil
-}
-func (b *Bridge) ProofReceipt(opts *bind.CallOpts, msgHash [32]byte) (struct {
-	ReceivedAt        uint64
-	PreferredExecutor common.Address
-}, error) {
-	return struct {
-		ReceivedAt        uint64
-		PreferredExecutor common.Address
-	}{
-		ReceivedAt:        0,
-		PreferredExecutor: relayer.ZeroAddress,
-	}, nil
-}
-
-func (b *Bridge) FilterMessageReceived(
-	opts *bind.FilterOpts,
-	msgHash [][32]byte,
-) (*bridge.BridgeMessageReceivedIterator, error) {
-	return &bridge.BridgeMessageReceivedIterator{}, nil
-}
-
 func (b *Bridge) FilterMessageSent(
 	opts *bind.FilterOpts,
 	signal [][32]byte,
 ) (*bridge.BridgeMessageSentIterator, error) {
 	return &bridge.BridgeMessageSentIterator{}, nil
+}
+
+func (b *Bridge) FilterMessageProcessed(
+	opts *bind.FilterOpts,
+	msgHash [][32]byte,
+) (*bridge.BridgeMessageProcessedIterator, error) {
+	return &bridge.BridgeMessageProcessedIterator{}, nil
 }
 
 func (b *Bridge) FilterMessageStatusChanged(
@@ -108,22 +83,18 @@ func (b *Bridge) ProcessMessage(
 	return ProcessMessageTx, nil
 }
 
-func (b *Bridge) ProveMessageReceived(
-	opts *bind.CallOpts,
-	_message bridge.IBridgeMessage,
-	_proof []byte,
-) (bool, error) {
-	if _message.Id.Uint64() == SuccessId.Uint64() {
-		return true, nil
-	}
-
-	return false, nil
-}
-
 func (b *Bridge) ParseMessageSent(log types.Log) (*bridge.BridgeMessageSent, error) {
 	return &bridge.BridgeMessageSent{}, nil
 }
 
 func (b *Bridge) SendMessage(opts *bind.TransactOpts, _message bridge.IBridgeMessage) (*types.Transaction, error) {
 	return ProcessMessageTx, nil
+}
+
+func (b *Bridge) IsMessageReceived(opts *bind.CallOpts, _message bridge.IBridgeMessage, _proof []byte) (bool, error) {
+	return true, nil
+}
+
+func (b *Bridge) Paused(opts *bind.CallOpts) (bool, error) {
+	return false, nil
 }
